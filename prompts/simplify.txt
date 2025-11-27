@@ -1,0 +1,9 @@
+Simplify this prompt by removing redundancy and making it more concise while maintaining effectiveness.
+
+CURRENT PROMPT:
+{current_prompt}
+
+SIMPLIFICATION GUIDANCE:
+{guidance}
+
+Generate a simplified version:

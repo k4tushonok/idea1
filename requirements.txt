@@ -1,0 +1,4 @@
+anthropic
+numpy
+openai
+google-generativeai

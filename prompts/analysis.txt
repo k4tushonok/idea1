@@ -1,0 +1,49 @@
+You are an expert prompt engineer analyzing why a prompt fails on certain examples.
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+TASK:
+Analyze the failures below and provide actionable recommendations for improving the prompt.
+
+FAILURE EXAMPLES (where the prompt produced incorrect outputs):
+
+{failure_examples_block}
+
+{success_examples_section}
+
+OPTIMIZATION HISTORY CONTEXT:
+{context_block}
+
+Please provide your analysis in the following structured format:
+
+## ERROR ANALYSIS
+Describe what specifically is going wrong with the current prompt. Be concrete and specific.
+- What patterns do you see in the failures?
+- What is the prompt missing or doing incorrectly?
+- Are there any ambiguities or unclear instructions?
+
+## SUGGESTED DIRECTION
+Describe the semantic direction in which the prompt should be modified.
+- What concepts or constraints should be added?
+- What aspects need clarification or emphasis?
+- What examples or patterns should be incorporated?
+
+## SPECIFIC SUGGESTIONS
+Provide 3-5 concrete, actionable suggestions for modifying the prompt:
+1. [First specific suggestion]
+2. [Second specific suggestion]
+3. [Third specific suggestion]
+...
+
+## PRIORITY
+Rate the urgency of these changes from 0.0 to 1.0, where:
+- 1.0 = Critical issues that must be fixed immediately
+- 0.7 = Important improvements that will significantly help
+- 0.5 = Moderate improvements
+- 0.3 = Minor refinements
+Priority: [your rating]
+
+Focus on being specific, actionable, and grounded in the examples provided.

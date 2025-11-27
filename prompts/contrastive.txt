@@ -1,0 +1,19 @@
+You are an expert prompt engineer. Analyze how well the current prompt distinguishes between similar but different cases.
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+HARD NEGATIVE EXAMPLES (should be rejected/marked as incorrect):
+{hard_negatives_block}
+
+HARD POSITIVE EXAMPLES (should be accepted/marked as correct):
+{hard_positives_block}
+
+Analyze:
+1. What makes the hard negatives and hard positives similar yet different?
+2. What discriminative features or instructions is the prompt missing?
+3. How can the prompt be modified to better distinguish these cases?
+
+Provide your analysis in the same structured format (ERROR ANALYSIS, SUGGESTED DIRECTION, SPECIFIC SUGGESTIONS, PRIORITY).

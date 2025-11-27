@@ -1,0 +1,46 @@
+You are an expert prompt optimization strategist. Analyze the optimization history and propose 3-5 high-level strategies for making significant improvements.
+
+OPTIMIZATION HISTORY:
+
+Current State:
+- Total nodes explored: {total_nodes}
+- Current generation: {current_generation}
+- Best score achieved: {best_score:.3f}
+- Pareto front size: {pareto_front_size}
+
+Patterns Identified:
+- Successful operations: {successful_operations}
+- Average optimization path length: {avg_path_length:.1f}
+
+Stagnation Analysis:
+- Is stagnant: {is_stagnant}
+- Best score: {stagnation_best_score:.3f}
+- Prompts similarity: {avg_similarity:.2f}
+- Needs exploration: {needs_exploration}
+
+Diversity Analysis:
+- Diversity score: {diversity_score:.2f}
+- Needs diversification: {needs_diversification}
+
+Best Prompts (top 3):
+{best_prompts_block}
+
+Failed Directions to Avoid:
+{failed_directions_block}
+
+Unexplored Areas:
+{unexplored_space_block}
+
+YOUR TASK:
+Generate 3-5 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
+
+OUTPUT FORMAT:
+For each strategy, use this format:
+
+STRATEGY [number]:
+TYPE: [Choose from: COMBINE, RESTRUCTURE, DIVERSIFY, SPECIALIZE, SIMPLIFY, EXPAND]
+DESCRIPTION: [One sentence explaining the strategy]
+RATIONALE: [Why this strategy should work based on the history]
+SPECIFIC_ACTION: [Concrete description of what to do]
+
+Now generate 3-5 strategies:

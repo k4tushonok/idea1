@@ -1,0 +1,11 @@
+Restructure the prompt according to this guidance:
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+RESTRUCTURING GUIDANCE:
+{content}
+
+Restructure the prompt while maintaining its core functionality. Output the complete modified prompt.

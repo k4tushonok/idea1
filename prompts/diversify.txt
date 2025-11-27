@@ -1,0 +1,15 @@
+Create a completely different approach to this prompt optimization task.
+
+EXISTING TOP PROMPTS (for reference, but create something different):
+{best_prompts_block}
+
+REQUIREMENTS:
+- Create a prompt with a SIGNIFICANTLY different structure
+- Use different instructional style
+- Explore alternative ways to achieve the same goal
+- Make it distinct from existing approaches
+
+SPECIFIC GUIDANCE:
+{specific_guidance}
+
+Generate a complete new prompt:

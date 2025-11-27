@@ -1,0 +1,11 @@
+Add the following example to the prompt:
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+EXAMPLE TO ADD:
+{content}
+
+Add this example in an appropriate place. Output the complete modified prompt.

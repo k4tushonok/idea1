@@ -1,0 +1,12 @@
+You are an expert prompt engineer. Combine the best elements from these prompts into a single, superior prompt.
+
+PROMPTS TO COMBINE:
+{prompts_block}
+
+TASK: Analyze these prompts and create a new prompt that incorporates the best elements from each:
+- Identify the strongest instructions from each prompt
+- Combine them coherently without redundancy
+- Maintain clarity and logical flow
+- Output a single, unified prompt that is better than any individual prompt
+
+Now generate the combined prompt:

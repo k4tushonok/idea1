@@ -1,0 +1,11 @@
+Add the following instruction to the prompt:
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+NEW INSTRUCTION TO ADD:
+{content}
+
+Integrate this instruction naturally into the prompt. Output the complete modified prompt.
