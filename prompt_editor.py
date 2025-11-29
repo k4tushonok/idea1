@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from llm_client import LLMClient, create_llm_client
+from llm_client import create_llm_client
 from llm_response_parser import LLMResponseParser
 import re
 
@@ -15,20 +15,17 @@ from data_structures import (
 class PromptEditor:
     """Редактор промптов - применяет текстовые градиенты для создания улучшенных вариантов. Использует LLM для интеллектуального редактирования на основе градиентов"""
     
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None, model: str = None):
+    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
         """
         Args:
             config: Конфигурация оптимизации
-            api_config: Конфигурация API {"provider": "...", "{provider}_api_key": "..."}
-            model: Модель для генерации вариантов
+            api_config: Конфигурация API {"provider": "...", "model": "...", "{provider}_api_key": "..."}
         """
         self.config = config
-        self.model = model
         self.api_config = api_config or {}
-        self.provider = self.api_config.get("provider")
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config, self.model)
+        self.llm = create_llm_client(self.config, self.api_config)
         
         # Статистика
         self.total_edits = 0
@@ -48,7 +45,7 @@ class PromptEditor:
         Returns:
             Список PromptNode с новыми вариантами промптов
         """
-        if not getattr(self, 'llm', None) or self.llm.provider is None:
+        if self.llm.provider is None:
             raise ValueError("No LLM client configured. Cannot generate variants.")
         
         if num_variants is None:
@@ -508,9 +505,9 @@ class PromptEditor:
         """Статистика редактирования"""
         return {
             "total_edits": self.total_edits,
-            "total_api_calls": getattr(self.llm, 'total_api_calls', 0),
-            "model": getattr(self.llm, 'model', self.model)
+            "total_api_calls": self.llm.total_api_calls,
+            "model": self.llm.model
         }
     
     def __repr__(self):
-        return f"PromptEditor(model={self.model}, edits={self.total_edits})"
+        return f"PromptEditor(provider={self.llm.provider}, edits={self.total_edits})"

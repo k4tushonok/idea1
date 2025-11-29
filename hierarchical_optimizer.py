@@ -31,16 +31,14 @@ class HierarchicalOptimizer:
     5. Early stopping и конвергенция
     """
     
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None, model: str = None):
+    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
         """
         Args:
             config: Конфигурация оптимизации
-            api_key: API ключ для Anthropic
-            model: Модель для использования
+            api_config: Конфигурация API {"provider": "...", "model": "...", "{provider}_api_key": "..."}
         """
         self.config = config
         self.api_config = api_config or {}
-        self.model = model
         
         # Инициализация компонентов
         print("Initializing Hierarchical Optimizer...")
@@ -52,16 +50,16 @@ class HierarchicalOptimizer:
         self.scorer = PromptScorer(config=config, api_config=api_config)
         
         # Text gradient generator
-        self.gradient_gen = TextGradientGenerator(config=config, api_config=api_config, model=model)
+        self.gradient_gen = TextGradientGenerator(config=config, api_config=api_config)
         
         # Prompt editor
-        self.editor = PromptEditor(config=config, api_config=api_config, model=model)
+        self.editor = PromptEditor(config=config, api_config=api_config)
         
         # Local optimizer
         self.local_optimizer = LocalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor)
         
         # Global optimizer
-        self.global_optimizer = GlobalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, api_config=api_config, model=model)
+        self.global_optimizer = GlobalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, api_config=api_config)
         
         # Метаданные оптимизации
         self.start_time = None
@@ -137,6 +135,7 @@ class HierarchicalOptimizer:
         
         # Отслеживание для early stopping
         generations_without_improvement = 0
+        generation = 0  # Инициализируем переменную перед циклом
         
         # Основной цикл оптимизации
         for generation in range(1, self.config.max_generations + 1):
@@ -228,7 +227,7 @@ class HierarchicalOptimizer:
             # Проверяем улучшение
             improvement = generation_best_score - best_score
             
-            if improvement > self.config.min_improvement:
+            if improvement + 1e-8 >= self.config.min_improvement:
                 print(f"  ✓ Improvement: +{improvement:.3f}")
                 self.best_node = generation_best
                 best_score = generation_best_score
@@ -315,6 +314,9 @@ class HierarchicalOptimizer:
         if len(candidates) <= population_size:
             return candidates
         
+        # Находим и сохраняем абсолютно лучшего кандидата
+        best_candidate = max(candidates, key=lambda n: n.metrics.composite_score())
+        
         # Стратегия 1: Паретто-фронт (если есть)
         front = self.history.get_pareto_front()
         front_ids = {node.id for node in front}
@@ -332,21 +334,21 @@ class HierarchicalOptimizer:
         selected = []
         selected_ids = set()
         
+        # Первым добавляем абсолютно лучшего кандидата
+        selected.append(best_candidate)
+        selected_ids.add(best_candidate.id)
+        
         # Добавляем узлы с фронта
         for node in front_candidates:
-            if node.id not in selected_ids:
+            if node.id not in selected_ids and len(selected) < population_size:
                 selected.append(node)
                 selected_ids.add(node.id)
-                if len(selected) >= population_size:
-                    break
         
         # Дополняем лучшими по метрике
         for node in candidates_sorted:
-            if node.id not in selected_ids:
+            if node.id not in selected_ids and len(selected) < population_size:
                 selected.append(node)
                 selected_ids.add(node.id)
-                if len(selected) >= population_size:
-                    break
         
         # Стратегия 3: Добавляем diversity если нужно
         if len(selected) < population_size:
@@ -375,9 +377,9 @@ class HierarchicalOptimizer:
                 selected.append(node)
                 selected_ids.add(node.id)
         
-        print(f"  Selected population:")
-        print(f"    From Pareto front: {len(front_candidates)}")
-        print(f"    Top performers: {len([n for n in selected if n not in front_candidates])}")
+        print(f"  Selected population ({len(selected)}):")
+        print(f"    Best: {best_candidate.metrics.composite_score():.3f} (generation {best_candidate.generation})")
+        print(f"    Pareto: {len([n for n in selected if n.id in front_ids])}")
         
         return selected[:population_size]
     
@@ -518,14 +520,13 @@ class HierarchicalOptimizer:
         print(f"  - trajectory.txt")
     
     @classmethod
-    def load_from_checkpoint(cls, checkpoint_path: str, api_config: Optional[Dict[str, str]] = None, model: str = None) -> 'HierarchicalOptimizer':
+    def load_from_checkpoint(cls, checkpoint_path: str, api_config: Optional[Dict[str, str]] = None) -> 'HierarchicalOptimizer':
         """
         Загрузка оптимизатора из checkpoint'а
         
         Args:
             checkpoint_path: Путь к checkpoint файлу
-            api_key: API ключ
-            model: Модель
+            api_config: Конфигурация API
             
         Returns:
             Загруженный HierarchicalOptimizer
@@ -536,8 +537,7 @@ class HierarchicalOptimizer:
         # Создаем новый оптимизатор с той же конфигурацией
         optimizer = cls(
             config=history.config,
-            api_config=api_config,
-            model=model
+            api_config=api_config
         )
         
         # Заменяем историю

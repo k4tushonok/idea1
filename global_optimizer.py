@@ -29,26 +29,24 @@ class GlobalOptimizer:
     - Может создавать совершенно новые направления
     """
     
-    def __init__(self, config: OptimizationConfig, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, api_config: Optional[Dict[str, str]] = None, model: str = None):
+    def __init__(self, config: OptimizationConfig, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, api_config: Optional[Dict[str, str]] = None):
         """
         Args:
             config: Конфигурация оптимизации
             history_manager: Менеджер истории
             scorer: Система оценки промптов
             prompt_editor: Редактор промптов
-            api_key: API ключ для Anthropic
-            model: Модель для анализа и генерации
+            api_config: Конфигурация API
         """
         self.config = config
         self.history = history_manager
         self.scorer = scorer
         self.editor = prompt_editor
-        self.model = model
         self.api_config = api_config or {}
         self.provider = self.api_config.get("provider")
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config, self.model)
+        self.llm = create_llm_client(self.config, self.api_config)
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0

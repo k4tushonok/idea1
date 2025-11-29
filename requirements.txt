@@ -1,4 +1,4 @@
 anthropic
 numpy
 openai
-google-generativeai
+google-genai

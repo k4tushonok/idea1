@@ -13,20 +13,17 @@ from data_structures import (
 class TextGradientGenerator:
     """Генератор текстовых градиентов"""
     
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None, model: str = None):
+    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
         """
         Args:
             config: Конфигурация оптимизации
             api_config: Конфигурация API
-            model: Модель для генерации градиентов
         """
         self.config = config
-        self.model = model
         self.api_config = api_config or {}
-        self.provider = self.api_config.get("provider")
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config, self.model)
+        self.llm = create_llm_client(self.config, self.api_config)
         
         # Статистика
         self.total_gradients_generated = 0
@@ -47,7 +44,7 @@ class TextGradientGenerator:
         Returns:
             TextGradient с анализом и рекомендациями
         """
-        if not getattr(self, 'llm', None) or self.llm.provider is None:
+        if self.llm.provider is None:
             raise ValueError("No LLM client configured. Cannot generate gradients.")
         
         if not failure_examples:
@@ -327,7 +324,7 @@ class TextGradientGenerator:
             return self._heuristic_clustering(failure_examples)
     
     def _heuristic_clustering(self, failure_examples: List[Example]) -> Dict[str, List[Example]]:
-        """Простая эвристическая кластеризация без LLM& Группирует по длине ошибки и типу несовпадения"""
+        """Простая эвристическая кластеризация без LLM. Группирует по длине ошибки и типу несовпадения"""
         clusters = defaultdict(list)
         
         for example in failure_examples:
@@ -388,9 +385,9 @@ class TextGradientGenerator:
         """Статистика генерации градиентов"""
         return {
             "total_gradients_generated": self.total_gradients_generated,
-            "total_api_calls": getattr(self.llm, 'total_api_calls', 0),
-            "model": getattr(self.llm, 'model', self.model)
+            "total_api_calls": self.llm.total_api_calls,
+            "model": self.llm.model
         }
     
     def __repr__(self):
-        return f"TextGradientGenerator(model={self.model}, gradients={self.total_gradients_generated})"
+        return f"TextGradientGenerator(provider={self.llm.provider}, gradients={self.total_gradients_generated})"

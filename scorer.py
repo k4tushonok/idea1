@@ -312,7 +312,7 @@ class PromptScorer:
         self.api_config = api_config or {}
         
         # Инициализируем LLM клиент (через фабрику для согласованной инициализации)
-        self.llm = create_llm_client(self.config, self.api_config, model=self.api_config.get("model"))
+        self.llm = create_llm_client(self.config, self.api_config)
         
         # Регистрируем стандартные метрики
         self.metrics: Dict[str, MetricEvaluator] = {}
@@ -332,6 +332,8 @@ class PromptScorer:
                 
         # Статистика
         self.total_evaluations = 0
+        # Последние выполненные примеры для последующей аналитики (предотвращает повторные вызовы API)
+        self._last_eval_examples: Optional[List[Example]] = None
     
     def _sync_metric_weights_with_config(self):
         """Синхронизация весов метрик с конфигурацией"""
@@ -361,14 +363,13 @@ class PromptScorer:
             self.config.metric_weights[metric.name] = metric.default_weight
         print(f"Registered metric: {metric} with weight {self.config.metric_weights[metric.name]:.3f}")
     
-    def execute_prompt(self, prompt: str, input_text: str, model: str = None, max_tokens: int = 1000) -> str:
+    def execute_prompt(self, prompt: str, input_text: str, max_tokens: int = 1000) -> str:
         """
         Выполнение промпта на одном примере
         
         Args:
             prompt: Текст промпта (система)
             input_text: Входные данные (пользователь)
-            model: Модель для использования
             max_tokens: Максимум токенов в ответе
             
         Returns:
@@ -384,8 +385,7 @@ class PromptScorer:
         text = self.llm.call(
             full_prompt,
             temperature=self.config.temperature,
-            max_tokens=max_tokens,
-            model=model
+            max_tokens=max_tokens
         )
         
         return text
@@ -405,15 +405,28 @@ class PromptScorer:
             raise ValueError('No provider configured. Cannot execute prompts.')
         
         results: List[Example] = []
-        for ex in examples:
+        errors: List[Tuple[int, Exception]] = []
+        
+        for idx, ex in enumerate(examples):
             try:
                 out = self.execute_prompt(prompt, ex.input_text)
+                ex.actual_output = out
             except Exception as e:
-                out = f'[ERROR: {str(e)}]'
-            ex.actual_output = out
+                ex.actual_output = None  # Оставляем None вместо маскирования ошибки
+                errors.append((idx, e))
+            
             results.append(ex)
+        
+        # Если были ошибки, логируем их (но не блокируем выполнение)
+        if errors:
+            print(f"⚠ {len(errors)} execution errors occurred:")
+            for idx, err in errors[:3]:  # Показываем первые 3 ошибки
+                print(f"  - Example {idx}: {str(err)[:100]}")
+            if len(errors) > 3:
+                print(f"  ... and {len(errors) - 3} more errors")
             
         return results
+
     
     def evaluate_prompt(self, prompt: str, examples: List[Example], execute: bool = True) -> Metrics:
         """
@@ -427,15 +440,22 @@ class PromptScorer:
         Returns:
             Объект Metrics со всеми оценками
         """
-        # Выполняем промпт, если нужно
+        # Выполняем промпт, если нужно - используем копию примеров чтобы не мутировать исходные
+        eval_examples = examples
         if execute:
-            examples = self.execute_prompt_batch(prompt, examples)
+            # Копируем примеры перед модификацией и сохраняем их для последующего анализа
+            from copy import deepcopy
+            eval_examples = deepcopy(examples)
+            eval_examples = self.execute_prompt_batch(prompt, eval_examples)
+            # Сохраняем выполненные примеры для последующей аналитики (в evaluate_node и др.)
+            self._last_eval_examples = eval_examples
+            self._last_eval_prompt = prompt  # Помечаем, какой промпт был выполнен
         
         # Вычисляем каждую метрику
         metrics = Metrics(weights=self.config.metric_weights)
         
         for metric_name, evaluator in self.metrics.items():
-            score = evaluator.evaluate(prompt, examples)
+            score = evaluator.evaluate(prompt, eval_examples)
             
             # Присваиваем значение соответствующему полю
             if hasattr(metrics, metric_name):
@@ -474,20 +494,48 @@ class PromptScorer:
         # Разделяем примеры на успехи и провалы
         successes = []
         failures = []
-        
-        for example in test_examples:
+
+        # Используем сохранённые примеры из evaluate_prompt() чтобы не делать дублирующие API вызовы
+        eval_examples = None
+        if execute:
+            # Если evaluate_prompt только что выполнял вызов API, используем кэшированные результаты
+            # Проверяем: (1) кэш существует, (2) промпт совпадает, (3) количество примеров совпадает
+            if (getattr(self, '_last_eval_examples', None) is not None and 
+                getattr(self, '_last_eval_prompt', None) == node.prompt_text and
+                len(self._last_eval_examples) == len(test_examples)):
+                eval_examples = self._last_eval_examples
+                print(f"  ✓ Using cached examples ({len(eval_examples)} evaluated)")
+            else:
+                # Fallback: выполняем снова
+                from copy import deepcopy
+                print(f"  ⚠ Cache miss - re-executing batch")
+                if getattr(self, '_last_eval_prompt', None) != node.prompt_text:
+                    print(f"    Reason: prompt changed")
+                elif len(getattr(self, '_last_eval_examples', [])) != len(test_examples):
+                    print(f"    Reason: size mismatch ({len(self._last_eval_examples)} vs {len(test_examples)})")
+                eval_examples = deepcopy(test_examples)
+                eval_examples = self.execute_prompt_batch(node.prompt_text, eval_examples)
+        else:
+            # Если execute=False, используем existing actual_output из test_examples
+            eval_examples = test_examples
+
+        # Собираем successes и failures
+        for example in eval_examples:
             if example.actual_output is None:
                 continue
-            
+
             if example.is_correct():
                 successes.append(example)
             else:
                 failures.append(example)
         
+        # Сохраняем в узел
         node.evaluation_examples = {
             "success": successes,
             "failures": failures
         }
+        
+        print(f"  Successes: {len(successes)}, Failures: {len(failures)}")
         
         return node
     

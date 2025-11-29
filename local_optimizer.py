@@ -127,7 +127,7 @@ class LocalOptimizer:
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
                 
                 # Проверяем, есть ли улучшение
-                if candidate_score > best_score + self.config.min_improvement:
+                if candidate_score + 1e-8 >= best_score + self.config.min_improvement:
                     print(f"✓ Improvement found! New best: {candidate_score:.3f}")
                     current_best = best_candidate
                     best_score = candidate_score
@@ -140,13 +140,13 @@ class LocalOptimizer:
                 print("✗ No valid candidates generated")
                 iterations_without_improvement += 1
             
+            iteration_time = time.time() - iteration_start_time
+            print(f"Iteration time: {iteration_time:.2f}s")
+            
             # Early stopping
             if iterations_without_improvement >= self.config.patience:
                 print(f"\nEarly stopping: {iterations_without_improvement} iterations without improvement")
                 break
-            
-            iteration_time = time.time() - iteration_start_time
-            print(f"Iteration time: {iteration_time:.2f}s")
             
             self.total_iterations += 1
         
@@ -388,7 +388,7 @@ class LocalOptimizer:
     
     def _select_best_candidate(self, candidates: List[PromptNode], current_best: PromptNode) -> Optional[PromptNode]:
         """
-        Выбор лучшего кандидата с учетом diversity bonus
+        Выбор лучшего кандидата
         
         Args:
             candidates: Оцененные кандидаты
@@ -400,34 +400,25 @@ class LocalOptimizer:
         if not candidates:
             return None
         
-        # Вычисляем скоры с учетом diversity
-        candidate_scores = []
-        
-        for candidate in candidates:
-            base_score = candidate.metrics.composite_score()
-            
-            # Добавляем diversity bonus
-            diversity = self.editor.calculate_edit_distance(
-                candidate.prompt_text,
-                current_best.prompt_text
-            )
-            
-            # Бонус за разнообразие
-            diversity_bonus = diversity * self.config.diversity_bonus
-            
-            final_score = base_score + diversity_bonus
-            
-            candidate_scores.append((candidate, final_score, base_score, diversity))
-        
-        # Сортируем по финальному скору
-        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+        # Сортируем по базовому скору (composite_score)
+        # Diversity используется только на уровне популяции, а не на уровне выбора лучшего
+        candidates_sorted = sorted(
+            candidates,
+            key=lambda c: c.metrics.composite_score(),
+            reverse=True
+        )
         
         # Выводим топ-3 для информации
-        print("\n  Top candidates:")
-        for i, (cand, final, base, div) in enumerate(candidate_scores[:3], 1):
-            print(f"    {i}. Score: {base:.3f} + diversity bonus {div*self.config.diversity_bonus:.3f} = {final:.3f}")
+        print("\n  Top candidates (by base score):")
+        for i, cand in enumerate(candidates_sorted[:3], 1):
+            score = cand.metrics.composite_score()
+            diversity = self.editor.calculate_edit_distance(
+                cand.prompt_text,
+                current_best.prompt_text
+            )
+            print(f"    {i}. Score: {score:.3f} (diversity: {diversity:.3f})")
         
-        best_candidate = candidate_scores[0][0]
+        best_candidate = candidates_sorted[0]
         
         return best_candidate
     

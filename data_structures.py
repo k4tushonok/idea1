@@ -116,13 +116,19 @@ class Metrics:
     
     def composite_score(self) -> float:
         """Вычисление композитной оценки промпта. Взвешенная сумма всех метрик"""
-        score = (
-            self.weights["accuracy"] * self.accuracy +
-            self.weights["safety"] * self.safety +
-            self.weights["robustness"] * self.robustness +
-            self.weights["efficiency"] * self.efficiency
-        )
-        return score
+        score = 0.0
+        for metric_name, weight in self.weights.items():
+            if weight == 0:
+                continue
+
+            if hasattr(self, metric_name):
+                value = float(getattr(self, metric_name))
+            else:
+                value = float(self.extra_metrics.get(metric_name, 0.0))
+
+            score += weight * value
+
+        return float(score)
     
     def to_dict(self) -> Dict:
         return {
