@@ -37,6 +37,8 @@ class LocalOptimizer:
         self.total_candidates_generated = 0
         self.total_candidates_evaluated = 0
         self.improvements_count = 0
+        # По-итерационные метрики
+        self.iteration_stats: List[Dict] = []  # each: {iteration, time, llm_calls}
         
         # Кэш для предотвращения повторной оценки
         self._evaluated_prompts: Set[str] = set()
@@ -89,6 +91,7 @@ class LocalOptimizer:
             print(f"\n--- Iteration {iteration + 1}/{num_iterations} ---")
             
             iteration_start_time = time.time()
+            calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
             # Шаг 1: Получаем провалы текущего лучшего промпта
             failure_examples = self._get_failure_examples(current_best, train_examples)
@@ -141,7 +144,15 @@ class LocalOptimizer:
                 iterations_without_improvement += 1
             
             iteration_time = time.time() - iteration_start_time
-            print(f"Iteration time: {iteration_time:.2f}s")
+            calls_after = getattr(self.scorer.llm, 'total_api_calls', 0)
+            calls_delta = calls_after - calls_before
+            # Record iteration stats
+            self.iteration_stats.append({
+                "iteration": iteration + 1,
+                "time": iteration_time,
+                "llm_calls": calls_delta
+            })
+            print(f"Iteration time: {iteration_time:.2f}s — LLM calls: {calls_delta} (total: {calls_after})")
             
             # Early stopping
             if iterations_without_improvement >= self.config.patience:
@@ -434,6 +445,9 @@ class LocalOptimizer:
             "improvements_count": self.improvements_count,
             "improvement_rate": self.improvements_count / max(self.total_iterations, 1),
             "avg_candidates_per_iteration": self.total_candidates_generated / max(self.total_iterations, 1),
+            "iteration_stats": self.iteration_stats,
+            "avg_iteration_time": (sum(s["time"] for s in self.iteration_stats) / len(self.iteration_stats)) if self.iteration_stats else None,
+            "total_llm_calls_by_local": sum(s["llm_calls"] for s in self.iteration_stats)
         }
     
     def __repr__(self):

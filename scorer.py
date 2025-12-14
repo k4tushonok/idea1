@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import numpy as np
 import re
+import time
 
 from data_structures import (
     Example, 
@@ -406,6 +407,8 @@ class PromptScorer:
         
         results: List[Example] = []
         errors: List[Tuple[int, Exception]] = []
+        batch_start_time = time.time()
+        calls_before = getattr(self.llm, 'total_api_calls', 0)
         
         for idx, ex in enumerate(examples):
             try:
@@ -424,7 +427,14 @@ class PromptScorer:
                 print(f"  - Example {idx}: {str(err)[:100]}")
             if len(errors) > 3:
                 print(f"  ... and {len(errors) - 3} more errors")
-            
+        batch_time = time.time() - batch_start_time
+        calls_after = getattr(self.llm, 'total_api_calls', 0)
+        calls_delta = calls_after - calls_before
+        # Save last batch stats for other components to use
+        self._last_batch_time = batch_time
+        self._last_batch_calls = calls_delta
+        print(f"Executed batch: {len(results)} examples in {batch_time:.2f}s — LLM calls this batch: {calls_delta}, total calls: {calls_after}")
+
         return results
 
     
@@ -535,7 +545,10 @@ class PromptScorer:
             "failures": failures
         }
         
-        print(f"  Successes: {len(successes)}, Failures: {len(failures)}")
+        stats_suffix = ""
+        if execute and getattr(self, '_last_batch_time', None) is not None:
+            stats_suffix = f" (batch time: {self._last_batch_time:.2f}s, llm calls: {getattr(self, '_last_batch_calls', 0)})"
+        print(f"  Successes: {len(successes)}, Failures: {len(failures)}{stats_suffix}")
         
         return node
     
