@@ -583,36 +583,6 @@ class PromptScorer:
         #TODO: можно добавить ранжирование по типу ошибки
         return failures[:top_k]
     
-    def evaluate_with_contrast(self, prompt: str, positive_examples: List[Example], negative_examples: List[Example]) -> Dict[str, float]:
-        """
-        Оценка с контрастными примерами
-        Проверяем, что промпт корректно различает positive/negative
-        
-        Args:
-            prompt: Промпт для оценки
-            positive_examples: Правильные примеры
-            negative_examples: Контрастные (неправильные) примеры
-            
-        Returns:
-            Словарь с метриками различения
-        """
-        # Выполняем на обоих наборах
-        positive_results = self.execute_prompt_batch(prompt, positive_examples)
-        negative_results = self.execute_prompt_batch(prompt, negative_examples)
-        
-        # Считаем, как часто модель правильно принимает/отклоняет
-        positive_accepted = sum(1 for ex in positive_results if ex.is_correct())
-        negative_rejected = sum(1 for ex in negative_results if not ex.is_correct())
-        
-        precision = positive_accepted / len(positive_results) if positive_results else 0.0
-        specificity = negative_rejected / len(negative_results) if negative_results else 0.0
-        
-        return {
-            "precision": precision,
-            "specificity": specificity,
-            "f1_contrast": 2 * (precision * specificity) / (precision + specificity) if (precision + specificity) > 0 else 0.0
-        }
-    
     def get_statistics(self) -> Dict[str, Any]:
         """Статистика работы scorer'а"""
         return {

@@ -157,40 +157,7 @@ class LocalOptimizer:
         print(f"{'='*60}\n")
         
         return current_best
-    
-    # ОДИНОЧНАЯ ИТЕРАЦИЯ ОПТИМИЗАЦИИ
-    
-    def single_iteration(self, current_node: PromptNode, train_examples: List[Example], validation_examples: List[Example]) -> List[PromptNode]:
-        """
-        Выполнение одной итерации локальной оптимизации
-        
-        Args:
-            current_node: Текущий узел
-            train_examples: Обучающие примеры
-            validation_examples: Валидационные примеры
-            
-        Returns:
-            Список новых оцененных кандидатов
-        """
-        # Получаем провалы
-        failure_examples = self._get_failure_examples(current_node, train_examples)
-        
-        if not failure_examples:
-            return []
-        
-        success_examples = current_node.evaluation_examples.get("success", [])
-        
-        # Генерируем градиенты
-        gradients = self._generate_gradients( current_node, failure_examples, success_examples)
-        
-        # Создаем кандидатов
-        candidates = self._generate_candidates(current_node, gradients)
-        
-        # Оцениваем
-        evaluated = self._evaluate_candidates(candidates, validation_examples)
-        
-        return evaluated
-    
+
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     
     def _get_failure_examples(self, node: PromptNode, examples: List[Example]) -> List[Example]:
@@ -457,56 +424,7 @@ class LocalOptimizer:
         return unique
     
     # ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ДЛЯ АНАЛИЗА
-    
-    def analyze_iteration_progress(self, starting_node: PromptNode, final_node: PromptNode) -> Dict:
-        """
-        Анализ прогресса за итерации
-        
-        Args:
-            starting_node: Начальный узел
-            final_node: Финальный узел
-            
-        Returns:
-            Словарь с аналитикой
-        """
-        lineage = self.history.get_lineage(final_node.id)
-        
-        # Траектория метрик
-        trajectory = []
-        for node in lineage:
-            if node.is_evaluated:
-                trajectory.append({
-                    "generation": node.generation,
-                    "score": node.metrics.composite_score(),
-                    "accuracy": node.metrics.accuracy,
-                    "safety": node.metrics.safety,
-                    "robustness": node.metrics.robustness,
-                })
-        
-        # Анализ операций
-        operations_used = defaultdict(int)
-        for node in lineage:
-            for op in node.operations:
-                operations_used[op.operation_type.value] += 1
-        
-        # Улучшение
-        if starting_node.is_evaluated and final_node.is_evaluated:
-            improvement = (final_node.metrics.composite_score() - 
-                          starting_node.metrics.composite_score())
-            relative_improvement = (improvement / max(starting_node.metrics.composite_score(), 0.01)) * 100
-        else:
-            improvement = 0.0
-            relative_improvement = 0.0
-        
-        return {
-            "iterations": len(lineage) - 1,
-            "improvement": improvement,
-            "relative_improvement_percent": relative_improvement,
-            "trajectory": trajectory,
-            "operations_used": dict(operations_used),
-            "final_metrics": final_node.metrics.to_dict() if final_node.is_evaluated else {}
-        }
-    
+ 
     def get_statistics(self) -> Dict:
         """Статистика локальной оптимизации"""
         return {

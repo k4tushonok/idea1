@@ -518,46 +518,7 @@ class HierarchicalOptimizer:
         print(f"  - optimization_report.json")
         print(f"  - best_prompt.txt")
         print(f"  - trajectory.txt")
-    
-    @classmethod
-    def load_from_checkpoint(cls, checkpoint_path: str, api_config: Optional[Dict[str, str]] = None) -> 'HierarchicalOptimizer':
-        """
-        Загрузка оптимизатора из checkpoint'а
-        
-        Args:
-            checkpoint_path: Путь к checkpoint файлу
-            api_config: Конфигурация API
-            
-        Returns:
-            Загруженный HierarchicalOptimizer
-        """
-        # Загружаем историю
-        history = HistoryManager.load(checkpoint_path)
-        
-        # Создаем новый оптимизатор с той же конфигурацией
-        optimizer = cls(
-            config=history.config,
-            api_config=api_config
-        )
-        
-        # Заменяем историю
-        optimizer.history = history
-        
-        # Обновляем ссылки в компонентах
-        optimizer.local_optimizer.history = history
-        optimizer.global_optimizer.history = history
-        
-        # Восстанавливаем лучший узел
-        best_nodes = history.get_best_nodes(top_k=1)
-        if best_nodes:
-            optimizer.best_node = best_nodes[0]
-        
-        print(f"Loaded checkpoint: {checkpoint_path}")
-        print(f"  Nodes: {len(history.nodes)}")
-        print(f"  Best score: {optimizer.best_node.metrics.composite_score():.3f if optimizer.best_node else 0:.3f}")
-        
-        return optimizer
-    
+
     # СРАВНЕНИЕ С BASELINE
     
     def compare_with_baseline(self, baseline_prompt: str, test_examples: List[Example]) -> Dict:

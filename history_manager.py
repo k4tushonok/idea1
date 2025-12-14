@@ -205,46 +205,6 @@ class HistoryManager:
         # Разворачиваем, чтобы корень был первым
         return list(reversed(lineage))
     
-    def get_children(self, node_id: str) -> List[PromptNode]:
-        """Получение всех дочерних узлов"""
-        node = self.get_node(node_id)
-        if node is None:
-            return []
-        
-        return [self.nodes[child_id] for child_id in node.children_ids 
-                if child_id in self.nodes]
-    
-    def get_descendants(self, node_id: str) -> List[PromptNode]:
-        """Получение всех потомков узла (рекурсивно). Используется для анализа всей ветки оптимизации"""
-        descendants = []
-        queue = deque([node_id])
-        
-        while queue:
-            current_id = queue.popleft()
-            node = self.get_node(current_id)
-            if node is None:
-                continue
-            
-            for child_id in node.children_ids:
-                if child_id in self.nodes:
-                    descendants.append(self.nodes[child_id])
-                    queue.append(child_id)
-        
-        return descendants
-    
-    def get_siblings(self, node_id: str) -> List[PromptNode]:
-        """Получение узлов-сиблингов (с тем же родителем). Полезно для сравнения альтернативных редакций"""
-        node = self.get_node(node_id)
-        if node is None or node.parent_id is None:
-            return []
-        
-        parent = self.get_node(node.parent_id)
-        if parent is None:
-            return []
-        
-        return [self.nodes[child_id] for child_id in parent.children_ids 
-                if child_id != node_id and child_id in self.nodes]
-    
     # ПОИСК И ФИЛЬТРАЦИЯ
     
     def get_nodes_by_generation(self, generation: int) -> List[PromptNode]:
@@ -260,18 +220,6 @@ class HistoryManager:
     def get_evaluated_nodes(self) -> List[PromptNode]:
         """Получение всех оцененных узлов"""
         return [node for node in self.nodes.values() if node.is_evaluated]
-    
-    def filter_nodes(self, predicate: Callable[[PromptNode], bool]) -> List[PromptNode]:
-        """
-        Фильтрация узлов по произвольному предикату
-        
-        Args:
-            predicate: Функция, возвращающая True для нужных узлов
-            
-        Returns:
-            Список отфильтрованных узлов
-        """
-        return [node for node in self.nodes.values() if predicate(node)]
     
     # АНАЛИЗ И РАНЖИРОВАНИЕ
     
@@ -396,26 +344,6 @@ class HistoryManager:
                     operation_counts[op.operation_type.value] += 1
         
         return dict(operation_counts)
-    
-    def get_optimization_trajectory(self, node_id: str) -> List[Tuple[int, float]]:
-        """
-        Получение траектории оптимизации (поколение, метрика) от корня до узла
-        Полезно для визуализации прогресса
-        
-        Args:
-            node_id: ID конечного узла
-            
-        Returns:
-            Список кортежей (поколение, композитная_метрика)
-        """
-        lineage = self.get_lineage(node_id)
-        trajectory = []
-        
-        for node in lineage:
-            if node.is_evaluated:
-                trajectory.append((node.generation, node.metrics.composite_score()))
-        
-        return trajectory
     
     def get_stagnation_info(self, window: int = 5) -> Dict[str, any]:
         """
