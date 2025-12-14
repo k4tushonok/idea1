@@ -111,23 +111,133 @@ class TextGradientGenerator:
         if n == 0:
             return []      
           
+        # Сначала кластеризуем провалы и делаем по одному градиенту на кластер
+        clusters = self.cluster_failure_types(failure_examples)
+
+        # Сортируем кластеры по размеру (большие сначала) и ограничиваем количеством градиентов
+        cluster_items = sorted(list(clusters.items()), key=lambda kv: len(kv[1]), reverse=True)
+        selected = cluster_items[:min(num_gradients, len(cluster_items))]
+
+        # Создаём батчи — максимум по batch_size примеров из каждого кластера
+        batches = []
+        cluster_names = []
+        for name, examples in selected:
+            cluster_names.append(name)
+            batches.append(examples[:batch_size])
+
+        # Если кластеров нет, откатываемся к случайным батчам
+        if not batches:
+            if n >= batch_size * num_gradients:
+                indices = list(range(n))
+                random.shuffle(indices)
+                for i in range(num_gradients):
+                    batch_idx = indices[i * batch_size:(i + 1) * batch_size]
+                    batch_failures = [failure_examples[j] for j in batch_idx]
+                    batches.append(batch_failures)
+                    cluster_names.append(f"cluster_{i}")
+            else:
+                for i in range(num_gradients):
+                    if n >= batch_size:
+                        sampled = random.sample(range(n), k=batch_size)
+                    else:
+                        sampled = [random.randrange(n) for _ in range(batch_size)]
+                    batch_failures = [failure_examples[j] for j in sampled]
+                    batches.append(batch_failures)
+                    cluster_names.append(f"cluster_{i}")
+
+        # Попробуем сгенерировать все градиенты за один вызов LLM: соберём единый промпт
         gradients = []
-        
-        if n >= batch_size * num_gradients:
-            indices = list(range(n))
-            random.shuffle(indices)
-            for i in range(num_gradients):
-                batch_idx = indices[i * batch_size:(i + 1) * batch_size]
-                batch_failures = [failure_examples[j] for j in batch_idx]
-                grad = self.generate_gradient(current_prompt, batch_failures, success_examples[:5] if success_examples else [])
-                gradients.append(grad)
-        else:
-            for _ in range(num_gradients):
-                if n >= batch_size:
-                    sampled = random.sample(range(n), k=batch_size)
+        if getattr(self, 'llm', None) and self.llm.provider is not None:
+            # Инструкция: вернуть N градиентов, каждый с наборами секций
+            header = (
+                f"You are an assistant for prompt optimization. Generate {len(batches)} separate gradient analyses, one per cluster. "
+                "For each cluster listed below, produce a block starting with a header in the format: '### GRADIENT <i> - <cluster_name>' (i starting at 1). "
+                "Each block must contain the following sections exactly: '## ERROR ANALYSIS', '## SUGGESTED DIRECTION', "
+                "'## SPECIFIC SUGGESTIONS' (a numbered list), and '## PRIORITY' (a number from 0.0 to 1.0). "
+                "Return the blocks in the same order as the clusters and avoid extra commentary."
+            )
+
+            # Собираем блоки с провалами/успехами
+            body_parts = []
+            for i, batch_failures in enumerate(batches, start=1):
+                cluster_name = cluster_names[i - 1] if i - 1 < len(cluster_names) else f"cluster_{i}"
+                failure_block = ""
+                for j, example in enumerate(batch_failures[:20], 1):
+                    failure_block += f"Example {j}:\n  Input: {example.input_text}\n  Expected: {example.expected_output}\n  Actual: {example.actual_output}\n\n"
+
+                success_section = ""
+                if success_examples:
+                    success_section = "SUCCESS EXAMPLES (where the prompt worked correctly):\n\n"
+                    for k, example in enumerate(success_examples[:5], 1):
+                        success_section += f"Example {k}:\n  Input: {example.input_text}\n  Expected: {example.expected_output}\n  Actual: {example.actual_output}\n\n"
+
+                body = f"--- CLUSTER: {cluster_name} (SET {i}) ---\n" + failure_block + success_section
+                body_parts.append(body)
+
+            combined_prompt = header + "\n\n" + "\n\n".join(body_parts)
+
+            try:
+                response_text = self.llm.call(combined_prompt)
+
+                # Разбиваем ответ на блоки градиентов и парсим каждый
+                import re
+                pattern = re.compile(r'(?:###\s*GRADIENT\s*\d+)', re.IGNORECASE)
+                # Находим позиции заголовков
+                splits = list(pattern.finditer(response_text))
+
+                if splits:
+                    blocks = []
+                    for idx, m in enumerate(splits):
+                        start = m.start()
+                        end = splits[idx + 1].start() if idx + 1 < len(splits) else len(response_text)
+                        blocks.append(response_text[start:end].strip())
+
+                    # Выровнять количество блоков и батчей
+                    for i, block in enumerate(blocks[:len(batches)]):
+                        # Попробуем извлечь имя кластера из заголовка: '### GRADIENT <i> - <cluster_name>'
+                        import re as _re
+                        mname = _re.search(r"###\s*GRADIENT\s*\d+\s*[-–]\s*(.+)", block, _re.IGNORECASE)
+                        cluster_name = None
+                        if mname:
+                            cluster_name = mname.group(1).strip()
+                        else:
+                            # Пытаемся найти маркер CLUSTER внутри блока
+                            m2 = _re.search(r"CLUSTER:\s*(.+?)\b", block, _re.IGNORECASE)
+                            if m2:
+                                cluster_name = m2.group(1).strip(" ()")
+
+                        # Определяем индекс батча по имени кластера, если возможно
+                        batch_idx = i
+                        if cluster_name:
+                            try:
+                                batch_idx = cluster_names.index(cluster_name)
+                            except ValueError:
+                                batch_idx = i
+
+                        parsed = self._parse_gradient_response(block, batches[batch_idx], success_examples[:5] if success_examples else [])
+                        parsed.metadata["batch_index"] = batch_idx
+                        parsed.metadata["cluster"] = cluster_name or cluster_names[batch_idx]
+                        gradients.append(parsed)
                 else:
-                    sampled = [random.randrange(n) for _ in range(batch_size)]
-                batch_failures = [failure_examples[j] for j in sampled]
+                    # Если LLM не вернул ожидаемых маркеров, пытаемся распарсить как единый градиент на каждую часть по разделителям
+                    fallback_parts = response_text.split('---')
+                    for i, part in enumerate(fallback_parts[:len(batches)]):
+                        cluster_name = cluster_names[i] if i < len(cluster_names) else None
+                        parsed = self._parse_gradient_response(part, batches[i], success_examples[:5] if success_examples else [])
+                        parsed.metadata["batch_index"] = i
+                        parsed.metadata["cluster"] = cluster_name
+                        gradients.append(parsed)
+
+                self.total_gradients_generated += len(gradients)
+            except Exception as e:
+                # В случае ошибки при едином вызове — откатываемся к старому поведению (по одному вызову)
+                print(f"Batch LLM call failed, falling back to per-gradient calls: {e}")
+                for batch_failures in batches:
+                    grad = self.generate_gradient(current_prompt, batch_failures, success_examples[:5] if success_examples else [])
+                    gradients.append(grad)
+        else:
+            # Нет LLM клиента — используем последовательные вызовы
+            for batch_failures in batches:
                 grad = self.generate_gradient(current_prompt, batch_failures, success_examples[:5] if success_examples else [])
                 gradients.append(grad)
         
