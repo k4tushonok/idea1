@@ -120,10 +120,11 @@ class HierarchicalOptimizer:
         
         initial_score = initial_node.metrics.composite_score()
         print(f"Initial score: {initial_score:.3f}")
-        print(f"  Accuracy: {initial_node.metrics.accuracy:.3f}")
-        print(f"  Safety: {initial_node.metrics.safety:.3f}")
-        print(f"  Robustness: {initial_node.metrics.robustness:.3f}")
-        print(f"  Efficiency: {initial_node.metrics.efficiency:.3f}\n")
+        print(f"  Accuracy: {initial_node.metrics.metrics['accuracy']:.3f}")
+        print(f"  Safety: {initial_node.metrics.metrics['safety']:.3f}")
+        print(f"  Robustness: {initial_node.metrics.metrics['robustness']:.3f}")
+        print(f"  Efficiency: {initial_node.metrics.metrics['efficiency']:.3f}")
+        print(f"  F1: {initial_node.metrics.metrics['f1']:.3f}\n")
         
         # Добавляем в историю
         self.history.add_node(initial_node)
@@ -287,7 +288,7 @@ class HierarchicalOptimizer:
                 execute=True
             )
             print(f"  Test score: {test_metrics.composite_score():.3f}")
-            print(f"  Test accuracy: {test_metrics.accuracy:.3f}")
+            print(f"  Test accuracy: {test_metrics.metrics['accuracy']:.3f}")
         
         # Сохранение результатов
         if save_dir:
@@ -419,7 +420,6 @@ class HierarchicalOptimizer:
             # Статистика компонентов
             "component_statistics": {
                 "history": self.history.get_statistics(),
-                "scorer": self.scorer.get_statistics(),
                 "gradient_generator": self.gradient_gen.get_statistics(),
                 "prompt_editor": self.editor.get_statistics(),
                 "local_optimizer": self.local_optimizer.get_statistics(),
@@ -554,24 +554,27 @@ class HierarchicalOptimizer:
         comparison = {
             "baseline": {
                 "composite_score": baseline_metrics.composite_score(),
-                "accuracy": baseline_metrics.accuracy,
-                "safety": baseline_metrics.safety,
-                "robustness": baseline_metrics.robustness,
-                "efficiency": baseline_metrics.efficiency
+                "accuracy": baseline_metrics.metrics["accuracy"],
+                "safety": baseline_metrics.metrics["safety"],
+                "robustness": baseline_metrics.metrics["robustness"],
+                "efficiency": baseline_metrics.metrics["efficiency"],
+                "f1": baseline_metrics.metrics["f1"]
             },
             "optimized": {
                 "composite_score": optimized_metrics.composite_score(),
-                "accuracy": optimized_metrics.accuracy,
-                "safety": optimized_metrics.safety,
-                "robustness": optimized_metrics.robustness,
-                "efficiency": optimized_metrics.efficiency
+                "accuracy": optimized_metrics.metrics["accuracy"],
+                "safety": optimized_metrics.metrics["safety"],
+                "robustness": optimized_metrics.metrics["robustness"],
+                "efficiency": optimized_metrics.metrics["efficiency"],
+                "f1": optimized_metrics.metrics["f1"]
             },
             "improvements": {
                 "composite_score": optimized_metrics.composite_score() - baseline_metrics.composite_score(),
-                "accuracy": optimized_metrics.accuracy - baseline_metrics.accuracy,
-                "safety": optimized_metrics.safety - baseline_metrics.safety,
-                "robustness": optimized_metrics.robustness - baseline_metrics.robustness,
-                "efficiency": optimized_metrics.efficiency - baseline_metrics.efficiency
+                "accuracy": optimized_metrics.metrics["accuracy"] - baseline_metrics.metrics["accuracy"],
+                "safety": optimized_metrics.metrics["safety"] - baseline_metrics.metrics["safety"],
+                "robustness": optimized_metrics.metrics["robustness"] - baseline_metrics.metrics["robustness"],
+                "efficiency": optimized_metrics.metrics["efficiency"] - baseline_metrics.metrics["efficiency"],
+                "f1": optimized_metrics.metrics["f1"] - baseline_metrics.metrics["f1"]
             }
         }
         

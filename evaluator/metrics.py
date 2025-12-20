@@ -35,16 +35,13 @@ class LLMJudgeMetric(MetricEvaluator):
                 actual=ex.actual_output
             )
 
-            try:
-                raw = judge_llm.call(
-                    judge_prompt,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens
-                )
-                parsed = self._parse_judge_output(raw)
-                scores.append(parsed["score"])
-            except Exception:
-                continue
+            raw = judge_llm.call(
+                judge_prompt,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
+            parsed = self._parse_judge_output(raw)
+            scores.append(parsed["score"])
 
         return float(sum(scores) / len(scores)) if scores else 0.0
 

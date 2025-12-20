@@ -55,25 +55,14 @@ class PromptScorer:
     def execute_prompt(self, prompt: str, input_text: str) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
-        return self.llm.call(
-            full_prompt,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens
-        )
+        return self.llm.call(full_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
 
     def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
-        """
-            Применяет промпт ко всему списку примеров
-            Для каждого Example сохраняет actual_output
-            Если LLM упал — ставит None
-        """
+        """Применяет промпт ко всему списку примеров. Для каждого Example сохраняет actual_output"""
         results = []
 
         for ex in examples:
-            try:
-                ex.actual_output = self.execute_prompt(prompt, ex.input_text)
-            except Exception:
-                ex.actual_output = None
+            ex.actual_output = self.execute_prompt(prompt, ex.input_text)
             results.append(ex)
 
         return results
@@ -86,15 +75,18 @@ class PromptScorer:
             eval_examples = self.execute_prompt_batch(prompt, eval_examples) 
             self._last_eval_examples = eval_examples
 
-        metrics = Metrics(metrics=self.config.metric_weights)
+        # Создаём объект Metrics и задаём веса из конфига
+        metrics = Metrics()
+        metrics.weights = self.config.metric_weights.copy()
+
         for name, metric in self.metrics.items():
-            score = metric.evaluate(
-                prompt=prompt,
-                examples=eval_examples,
-                judge_llm=self.judge_llm
-            )
-            setattr(metrics, name, score)
-        
+            weight = self.config.metric_weights.get(name, 0.0)
+            if weight <= 0:
+                metrics.metrics[name] = 0.0
+                continue
+            score = metric.evaluate(prompt=prompt, examples=eval_examples, judge_llm=self.judge_llm)
+            metrics.metrics[name] = float(score)
+
         return metrics
 
     def evaluate_node(self, node: PromptNode, test_examples: List[Example], execute: bool = True) -> PromptNode:
@@ -113,9 +105,5 @@ class PromptScorer:
             else:
                 failures.append(ex)
 
-        node.evaluation_examples = {
-            "success": successes,
-            "failures": failures
-        }
-
+        node.evaluation_examples = { "success": successes, "failures": failures }
         return node

@@ -102,17 +102,24 @@ class EditOperation:
 class Metrics:
     """Метрики оценки промпта. Композитная оценка для ранжирования кандидатов"""
     metrics: Dict[str, float] = field(default_factory=lambda: {
-        "accuracy": 0.5,
-        "safety": 0.2,
-        "robustness": 0.2,
-        "efficiency": 0.1,
+        "accuracy": 0.0,
+        "safety": 0.0,
+        "robustness": 0.0,
+        "efficiency": 0.0,
         "f1": 0.0
     })
-    
+    weights: Dict[str, float] = field(default_factory=lambda: {
+        "accuracy": 0.5,
+        "safety": 0.2,
+        "robustness": 0.1,
+        "efficiency": 0.1,
+        "f1": 0.1
+    })
+
     def composite_score(self) -> float:
-        """Вычисление композитной оценки"""
-        return sum(value * weight for key, value in self.metrics.items() 
-                   for w_key, weight in self.metrics.items() if key == w_key)
+        """Вычисление композитной оценки как взвешенной суммы метрик"""
+        keys = set(list(self.metrics.keys()) + list(self.weights.keys()))
+        return sum(self.metrics.get(k, 0.0) * self.weights.get(k, 0.0) for k in keys)
     
     def to_dict(self) -> Dict:
         d = self.metrics.copy()
@@ -123,7 +130,9 @@ class Metrics:
     def from_dict(cls, data: Dict) -> 'Metrics':
         data = data.copy()
         data.pop("composite_score", None)
-        return cls(metrics=data)
+        m = cls()
+        m.metrics = {k: float(v) for k, v in data.items()}
+        return m
 
 @dataclass
 class PromptNode:
