@@ -10,7 +10,7 @@ from data_structures import (
     OptimizationConfig
 )
 from history_manager import HistoryManager
-from scorer import PromptScorer
+from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
 

@@ -30,7 +30,6 @@ class Example:
     actual_output: Optional[str] = None                     # Фактический результат 
     metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные
     
-    #TODO: менее жесткое сравнение
     def is_correct(self) -> bool:
         """Проверка корректности ответа"""
         if self.actual_output is None:
@@ -47,7 +46,7 @@ class Example:
 @dataclass
 class TextGradient:
     """Текстовый градиент. Описывает на естественном языке, что не так и как исправить"""
-    failure_examples: List[Example]                               # Примеры, на которых промпт ошибся
+    failure_examples: List[Example] = field(default_factory=list) # Примеры, на которых промпт ошибся
     success_examples: List[Example] = field(default_factory=list) # Примеры, на которых промпт работает корректно
     error_analysis: str = ""                                      # Анализ ошибок
     suggested_direction: str = ""                                 # Предложенное направление улучшения
@@ -102,50 +101,29 @@ class EditOperation:
 @dataclass
 class Metrics:
     """Метрики оценки промпта. Композитная оценка для ранжирования кандидатов"""
-    accuracy: float = 0.0                                         # Точность на тестовых примерах
-    safety: float = 1.0                                           # Безопасность
-    robustness: float = 0.0                                       # Устойчивость к adversarial примерам
-    efficiency: float = 1.0                                       # Эффективность (краткость, токены)
-    extra_metrics: Dict[str, float] = field(default_factory=dict) # Дополнительные метрики для анализа
-    weights: Dict[str, float] = field(default_factory=lambda: {   # Веса для композитной метрики
+    metrics: Dict[str, float] = field(default_factory=lambda: {
         "accuracy": 0.5,
         "safety": 0.2,
         "robustness": 0.2,
-        "efficiency": 0.1
+        "efficiency": 0.1,
+        "f1": 0.0
     })
     
     def composite_score(self) -> float:
-        """Вычисление композитной оценки промпта. Взвешенная сумма всех метрик"""
-        score = 0.0
-        for metric_name, weight in self.weights.items():
-            if weight == 0:
-                continue
-
-            if hasattr(self, metric_name):
-                value = float(getattr(self, metric_name))
-            else:
-                value = float(self.extra_metrics.get(metric_name, 0.0))
-
-            score += weight * value
-
-        return float(score)
+        """Вычисление композитной оценки"""
+        return sum(value * weight for key, value in self.metrics.items() 
+                   for w_key, weight in self.metrics.items() if key == w_key)
     
     def to_dict(self) -> Dict:
-        return {
-            "accuracy": self.accuracy,
-            "safety": self.safety,
-            "robustness": self.robustness,
-            "efficiency": self.efficiency,
-            "composite_score": self.composite_score(),
-            "weights": self.weights,
-            "extra_metrics": self.extra_metrics
-        }
+        d = self.metrics.copy()
+        d["composite_score"] = self.composite_score()
+        return d
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'Metrics':
         data = data.copy()
-        data.pop("composite_score", None)  # Вычисляется автоматически
-        return cls(**data)
+        data.pop("composite_score", None)
+        return cls(metrics=data)
 
 @dataclass
 class PromptNode:
@@ -246,7 +224,8 @@ class OptimizationConfig:
         "accuracy": 0.5,
         "safety": 0.2,
         "robustness": 0.2,
-        "efficiency": 0.1
+        "efficiency": 0.1,
+        "f1": 0.0
     })
     
     def to_dict(self) -> Dict:

@@ -14,7 +14,7 @@ from data_structures import (
     EditOperation
 )
 from history_manager import HistoryManager
-from scorer import PromptScorer
+from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 
 class GlobalOptimizer:
