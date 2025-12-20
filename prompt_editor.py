@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional
-from llm_client import create_llm_client
-from llm_response_parser import LLMResponseParser
+from llm.llm_client import create_llm
+from llm.llm_response_parser import LLMResponseParser
 import re
 
 from data_structures import (
@@ -25,7 +25,7 @@ class PromptEditor:
         self.api_config = api_config or {}
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config)
+        self.llm = create_llm(self.config, self.api_config)
         
         # Статистика
         self.total_edits = 0
@@ -59,7 +59,7 @@ class PromptEditor:
         )
         
         try:
-            response_text = self.llm.call(editing_prompt, max_tokens=4000)
+            response_text = self.llm.invoke(prompt=editing_prompt, max_tokens=4000)
             
             # Парсим варианты из ответа
             variants = self._parse_variants(
@@ -308,7 +308,7 @@ class PromptEditor:
             """
         
         try:
-            new_prompt = self.llm.call(editing_prompt, temperature=0.7, max_tokens=2000)
+            new_prompt = self.llm.invoke(prompt=editing_prompt, temperature=0.7, max_tokens=2000)
             
             # Убираем markdown форматирование если есть
             new_prompt = re.sub(r'^```.*?\n', '', new_prompt)
@@ -401,7 +401,7 @@ class PromptEditor:
         combining_prompt += "\nGUIDELINES:\n" + adding_prompt
         
         try:
-            combined_prompt = self.llm.call(combining_prompt, temperature=0.7, max_tokens=3000)
+            combined_prompt = self.llm.invoke(prompt=combining_prompt, temperature=0.7, max_tokens=3000)
             
             combined_prompt = re.sub(r'^```.*?\n', '', combined_prompt)
             combined_prompt = re.sub(r'\n```$', '', combined_prompt)
@@ -506,7 +506,7 @@ class PromptEditor:
         return {
             "total_edits": self.total_edits,
             "total_api_calls": self.llm.total_api_calls,
-            "model": self.llm.model
+            "model": self.llm.provider
         }
     
     def __repr__(self):

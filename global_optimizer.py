@@ -3,7 +3,7 @@ import numpy as np
 from collections import defaultdict, Counter
 import time
 
-from llm_client import create_llm_client
+from llm.llm_client import create_llm
 
 from data_structures import (
     Example,
@@ -46,7 +46,7 @@ class GlobalOptimizer:
         self.provider = self.api_config.get("provider")
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config)
+        self.llm = create_llm(self.config, self.api_config)
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0
@@ -317,7 +317,7 @@ class GlobalOptimizer:
         strategy_prompt = self._build_strategy_prompt(history_analysis)
         
         try:
-            response_text = self.llm.call(strategy_prompt, temperature=0.8)
+            response_text = self.llm.invoke(prompt=strategy_prompt, temperature=0.8)
             
             # Парсим стратегии из ответа
             strategies = self._parse_strategies(response_text)
@@ -568,7 +568,7 @@ class GlobalOptimizer:
         diversify_prompt = template.format(best_prompts_block=best_prompts_block, specific_guidance=strategy['action'])
         
         try:
-            new_prompt_text = self.llm.call(diversify_prompt, temperature=0.9)
+            new_prompt_text = self.llm.invoke(prompt=diversify_prompt, temperature=0.9)
             
             operation = EditOperation(
                 operation_type=OperationType.RESTRUCTURE,
@@ -620,7 +620,7 @@ class GlobalOptimizer:
         simplify_prompt = template.format(current_prompt=best_node.prompt_text, guidance=strategy['action'])
         
         try:
-            simplified_text = self.llm.call(simplify_prompt, temperature=0.5)
+            simplified_text = self.llm.invoke(prompt=simplify_prompt, temperature=0.5)
             
             operation = EditOperation(
                 operation_type=OperationType.REPHRASE,

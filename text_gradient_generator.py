@@ -1,8 +1,8 @@
 from typing import List, Dict, Optional
 import random
 from collections import defaultdict
-from llm_client import create_llm_client
-from llm_response_parser import LLMResponseParser
+from llm.llm_client import create_llm
+from llm.llm_response_parser import LLMResponseParser
 
 from data_structures import (
     Example,
@@ -23,7 +23,7 @@ class TextGradientGenerator:
         self.api_config = api_config or {}
         
         # Инициализация LLM клиента
-        self.llm = create_llm_client(self.config, self.api_config)
+        self.llm = create_llm(self.config, self.api_config)
         
         # Статистика
         self.total_gradients_generated = 0
@@ -63,7 +63,7 @@ class TextGradientGenerator:
         
         # Вызываем LLM для анализа
         try:
-            analysis_text = self.llm.call(analysis_prompt)
+            analysis_text = self.llm.invoke(prompt=analysis_prompt)
             
             # Парсим ответ LLM и извлекаем компоненты градиента
             gradient = self._parse_gradient_response(
@@ -177,7 +177,7 @@ class TextGradientGenerator:
             combined_prompt = header + "\n\n" + "\n\n".join(body_parts)
 
             try:
-                response_text = self.llm.call(combined_prompt)
+                response_text = self.llm.invoke(prompt=combined_prompt)
 
                 # Разбиваем ответ на блоки градиентов и парсим каждый
                 import re
@@ -364,7 +364,7 @@ class TextGradientGenerator:
         )
         
         try:
-            analysis_text = self.llm.call(analysis_prompt)
+            analysis_text = self.llm.invoke(prompt=analysis_prompt)
             
             gradient = self._parse_gradient_response(
                 analysis_text,
@@ -425,7 +425,7 @@ class TextGradientGenerator:
         clustering_prompt += template
         
         try:
-            response_text = self.llm.call(clustering_prompt, temperature=0.5)
+            response_text = self.llm.invoke(prompt=clustering_prompt, temperature=0.5)
             clusters = self._parse_clusters(response_text, failure_examples)
             return clusters
             
@@ -496,7 +496,7 @@ class TextGradientGenerator:
         return {
             "total_gradients_generated": self.total_gradients_generated,
             "total_api_calls": self.llm.total_api_calls,
-            "model": self.llm.model
+            "model": self.llm.provider
         }
     
     def __repr__(self):

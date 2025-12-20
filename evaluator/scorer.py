@@ -9,7 +9,7 @@ from evaluator.metrics import (
     EfficiencyMetric
 )
 from data_structures import Example, Metrics, PromptNode, OptimizationConfig
-from llm_client import create_llm_client
+from llm.llm_client import create_llm
 
 class PromptScorer:
     def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
@@ -17,9 +17,9 @@ class PromptScorer:
         self.api_config = api_config or {}
 
         # Основной LLM для генерации ответов
-        self.llm = create_llm_client(self.config, self.api_config)
+        self.llm = create_llm(self.config, self.api_config)
         # LLM для оценки
-        self.judge_llm = create_llm_client(self.config, self.api_config)
+        self.judge_llm = create_llm(self.config, self.api_config)
 
         # Регистрируем метрики
         self.metrics: Dict[str, MetricEvaluator] = {}
@@ -55,7 +55,7 @@ class PromptScorer:
     def execute_prompt(self, prompt: str, input_text: str) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
-        return self.llm.call(full_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
+        return self.llm.invoke(prompt=full_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
 
     def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
         """Применяет промпт ко всему списку примеров. Для каждого Example сохраняет actual_output"""
