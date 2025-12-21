@@ -1,205 +1,141 @@
 import re
 from typing import List, Dict
 from collections import defaultdict
-from data_structures import Example
-from data_structures import TextGradient
-from data_structures import PromptNode
+from data_structures import Example, TextGradient, PromptNode, EditOperation, OperationType, OptimizationSource
 from typing import Optional
-from data_structures import EditOperation
-from data_structures import OperationType
-from data_structures import OptimizationSource
 
-class LLMResponseParser:
+MIN_PROMPT_LENGTH = 20
+FALLBACK_ANALYSIS_LENGTH = 500
+DEFAULT_PRIORITY = 0.5
+
+SECTION_MARKERS = [
+    "## ERROR ANALYSIS",
+    "## SUGGESTED DIRECTION",
+    "## SPECIFIC SUGGESTIONS",
+    "## PRIORITY"
+]
+
+CODE_BLOCK_RE = re.compile(r"```(?:\w+)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
+PROMPT_BLOCK_RE = re.compile(r"PROMPT:\s*```(.*?)```", re.DOTALL | re.IGNORECASE)
+PROMPT_FALLBACK_RE = re.compile(r"PROMPT:\s*(.+)", re.DOTALL | re.IGNORECASE)
+CHANGES_RE = re.compile(r"CHANGES MADE:\s*(.+?)(?=OPERATION TYPE|PROMPT|$)", re.DOTALL | re.IGNORECASE)
+OPERATION_RE = re.compile(r"OPERATION TYPE:\s*(\w+)", re.IGNORECASE)
+LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]\s*|[-*•]\s+)(.+)$")
+PRIORITY_RE = re.compile(r"(?:priority|score)?\s*:?\s*([01](?:\.\d+)?)", re.IGNORECASE)
+CODE_FENCE_STRIP_RE = re.compile(r"^```.*?\n|\n```$", re.DOTALL)
+GRADIENT_SPLIT_RE = re.compile(r"(###\s*GRADIENT.*?)(?=###\s*GRADIENT|\Z)", re.DOTALL | re.IGNORECASE)
+
+class MarkdownParser:
     @staticmethod
     def extract_code_blocks(text: str) -> List[str]:
-        """Извлечение всех блоков кода из текста"""
-        pattern = r'```(?:\w+)?\s*\n?(.*?)\n?```' 
-        matches = re.findall(pattern, text, re.DOTALL)
-        
         return [
             block.strip()
-            for block in matches
-            if block and len(block.strip()) >= 20
+            for block in CODE_BLOCK_RE.findall(text)
+            if block and len(block.strip()) >= MIN_PROMPT_LENGTH
         ]
-    
-    @staticmethod
-    def extract_prompt(block: str) -> Optional[str]:
-        match = re.search(r'PROMPT:\s*```(.*?)```', block, re.DOTALL)
-        if not match:
-            match = re.search(r'PROMPT:\s*(.+)', block, re.DOTALL)
-        return match.group(1).strip() if match else None
-    
-    @staticmethod
-    def extract_description(block: str) -> str:
-        match = re.search(r'CHANGES MADE:\s*(.+?)(?=OPERATION TYPE|PROMPT|$)', block, re.DOTALL)
-        return match.group(1).strip() if match else "Edited based on gradient"
 
     @staticmethod
-    def extract_operation_type(block: str) -> OperationType:
-        match = re.search(r'OPERATION TYPE:\s*(\w+)', block)
-        return LLMResponseParser.string_to_operation_type(match.group(1)) if match else OperationType.MODIFY_INSTRUCTION
-    
+    def strip_code_fences(text: str) -> str:
+        return CODE_FENCE_STRIP_RE.sub("", text).strip()
+
+class SectionParser:
+    @staticmethod
+    def split_by_markers(text: str, markers: List[str], case_sensitive: bool = False) -> Dict[str, str]:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        found = []
+
+        for marker in sorted(markers, key=len, reverse=True):
+            for match in re.finditer(re.escape(marker), text, flags):
+                found.append((match.start(), match.end(), marker.upper()))
+
+        found.sort(key=lambda x: x[0])
+
+        sections: Dict[str, str] = {}
+        for i, (start, end, marker) in enumerate(found):
+            if marker in sections:
+                continue  # ignore duplicates
+            next_start = found[i + 1][0] if i + 1 < len(found) else len(text)
+            sections[marker] = text[end:next_start].strip()
+
+        return sections
+
     @staticmethod
     def extract_numbered_list(text: str) -> List[str]:
-        """
-        Извлечение нумерованного списка из текста
-        Работает с форматами: 
-            - 1. item
-            - 1) item
-            - - item
-            - * item
-            - • item
-        
-        Args:
-            text: Текст содержащий список
-            
-        Returns:
-            Список пунктов
-        """
-        pattern = r'^(?:\d+[.)]\s*|[-*•]\s+)(.+?)$'
         items: List[str] = []
+        current: Optional[str] = None
 
         for line in text.splitlines():
-            match = re.match(pattern, line.strip())
+            line = line.rstrip()
+            match = LIST_ITEM_RE.match(line.strip())
             if match:
-                item = match.group(1).strip()
-                if len(item) > 5:
-                    items.append(item)
+                if current:
+                    items.append(current.strip())
+                current = match.group(1)
+            elif current and line.startswith(" "):
+                current += " " + line.strip()
 
-        return items
+        if current:
+            items.append(current.strip())
 
+        return [i for i in items if len(i) > 5]
+    
     @staticmethod
     def extract_priority(text: str) -> float:
-        """
-        Извлечение значения приоритета из текста
-        Ищет числа между 0.0 и 1.0
-        
-        Args:
-            text: Текст содержащий приоритет
-            
-        Returns:
-            Значение приоритета от 0.0 до 1.0
-        """
-        pattern = r'(?:priority|score)?\s*:?\s*([0-1]?\.?\d{1,2})'
-        for value in re.findall(pattern, text, re.IGNORECASE):
+        for value in PRIORITY_RE.findall(text):
             try:
                 score = float(value)
                 if 0.0 <= score <= 1.0:
                     return score
             except ValueError:
-                pass
+                continue
+        return DEFAULT_PRIORITY
 
-        return 0.5
-    
+class VariantParser:
     @staticmethod
-    def split_by_markers(text: str, markers: List[str], case_sensitive: bool = False) -> Dict[str, str]:
-        """
-        Разбиение текста на секции по маркерам
-        
-        Args:
-            text: Текст для разбиения
-            markers: Список маркеров (например, ['## ERROR ANALYSIS', '## SUGGESTIONS'])
-            case_sensitive: Учитывать ли регистр
-            
-        Returns:
-            Словарь {маркер: содержимое}
-        """
-        flags = 0 if case_sensitive else re.IGNORECASE
-        sections: Dict[str, str] = {}
-
-        sorted_markers = sorted(markers, key=len, reverse=True)
-        found = []
-
-        for marker in sorted_markers:
-            for match in re.finditer(re.escape(marker), text, flags):
-                found.append((match.start(), match.end(), marker))
-
-        found.sort(key=lambda x: x[0])
-
-        for i, (start, end, marker) in enumerate(found):
-            next_start = found[i + 1][0] if i + 1 < len(found) else len(text)
-            sections[marker.upper()] = text[end:next_start].strip()
-
-        return sections
+    def extract_prompt(block: str) -> Optional[str]:
+        match = PROMPT_BLOCK_RE.search(block)
+        if not match:
+            match = PROMPT_FALLBACK_RE.search(block)
+        return match.group(1).strip() if match else None
 
     @staticmethod
-    def parse_clusters(response_text: str, failure_examples: List[Example]) -> Dict[str, List[Example]]:
-        """Парсинг ответа LLM о кластерах"""
-        clusters = defaultdict(list)
-        lines = response_text.split('\n')
-        current_category = None
-        
-        for line in lines:
-            line = line.strip()
-            if line.startswith("CATEGORY:"):
-                current_category = line.replace("CATEGORY:", "").strip()
-            elif line.startswith("EXAMPLES:") and current_category:
-                matches = [int(m)-1 for m in re.findall(r'\d+', line)]
-                for idx in matches:
-                    if 0 <= idx < len(failure_examples):
-                        clusters[current_category].append(failure_examples[idx])
-        
-        if not clusters:
-            clusters["all"] = failure_examples
-        
-        return dict(clusters)
-    
+    def extract_description(block: str) -> str:
+        match = CHANGES_RE.search(block)
+        return match.group(1).strip() if match else "Edited based on gradient"
+
     @staticmethod
-    def parse_gradient_response(response_text: str, failure_examples: List[Example], success_examples: List[Example], batch_index: int = None, cluster_name: str = None) -> TextGradient:
-        """Парсинг ответа LLM и извлечение компонентов текстового градиента"""
-        # Используем консолидированный парсер для разбиения на секции
-        markers = ['## ERROR ANALYSIS', '## SUGGESTED DIRECTION', '## SPECIFIC SUGGESTIONS', '## PRIORITY']
-        sections = LLMResponseParser.split_by_markers(response_text, markers)
-        
-        # Извлекаем компоненты из секций
-        error_analysis = sections.get('## ERROR ANALYSIS', '').strip() or response_text[:500]
-        suggested_direction = sections.get('## SUGGESTED DIRECTION', '').strip() or "See error analysis for details"
+    def extract_operation_type(block: str) -> OperationType:
+        match = OPERATION_RE.search(block)
+        return VariantParser.string_to_operation_type(match.group(1)) if match else OperationType.MODIFY_INSTRUCTION
 
-        # Извлекаем specific suggestions как нумерованный список
-        specific_suggestions = LLMResponseParser.extract_numbered_list(sections.get('## SPECIFIC SUGGESTIONS', ''))
-        
-        # Извлекаем приоритет
-        priority = min(max(LLMResponseParser.extract_priority(sections.get('## PRIORITY', '')), 0.0), 1.0)
+    @staticmethod
+    def string_to_operation_type(value: str) -> OperationType:
+        normalized = value.lower().replace(" ", "_")
+        return OperationType.__members__.get(normalized.upper(), OperationType.MODIFY_INSTRUCTION)
 
-        gradient = TextGradient(
-            failure_examples=failure_examples,
-            success_examples=success_examples,
-            error_analysis=error_analysis,
-            suggested_direction=suggested_direction,
-            specific_suggestions=specific_suggestions,
-            priority=priority
-        )
-        gradient.metadata["batch_index"] = batch_index
-        gradient.metadata["cluster"] = cluster_name
-        return gradient
-    
     @staticmethod
     def parse_variants(response_text: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> List[PromptNode]:
-        """Парсинг вариантов промптов из ответа LLM"""
         nodes: List[PromptNode] = []
 
-        for block in LLMResponseParser.extract_code_blocks(response_text):
-            node = LLMResponseParser.parse_single_variant(block, original_prompt, gradient, parent_node)
+        for block in MarkdownParser.extract_code_blocks(response_text):
+            node = VariantParser.parse_single_variant(block, original_prompt, gradient, parent_node)
             if node:
                 nodes.append(node)
 
-        return nodes    
-    
+        return nodes
+
     @staticmethod
     def parse_single_variant(block: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> Optional[PromptNode]:
-        new_prompt = LLMResponseParser.extract_prompt(block)
-        if not new_prompt or len(new_prompt) < 20:
+        new_prompt = VariantParser.extract_prompt(block)
+        if not new_prompt or len(new_prompt) < MIN_PROMPT_LENGTH:
             return None
 
-        operation_type = LLMResponseParser.extract_operation_type(block)
-        description = LLMResponseParser.extract_description(block)
-
         operation = EditOperation(
-            operation_type=operation_type,
-            description=description,
+            operation_type=VariantParser.extract_operation_type(block),
+            description=VariantParser.extract_description(block),
             gradient_source=gradient,
-            before_snippet=original_prompt[:200] + "...",
-            after_snippet=new_prompt[:200] + "..."
+            before_snippet=original_prompt + "...",
+            after_snippet=new_prompt + "...",
         )
 
         generation = parent_node.generation + 1 if parent_node else 1
@@ -209,14 +145,87 @@ class LLMResponseParser:
             parent_id=parent_node.id if parent_node else None,
             generation=generation,
             source=OptimizationSource.LOCAL,
-            operations=[operation]
+            operations=[operation],
         )
 
+class GradientParser:
     @staticmethod
-    def string_to_operation_type(value: str) -> OperationType:
-        normalized = value.lower().replace(" ", "_")
-        return OperationType.__members__.get(normalized.upper(), OperationType.MODIFY_INSTRUCTION)
+    def parse_gradient_response(response_text: str, failure_examples: List[Example], success_examples: List[Example], batch_index: int = None, cluster_name: str = None) -> TextGradient:
+        sections = SectionParser.split_by_markers(response_text, SECTION_MARKERS)
+        error_analysis = (sections.get("## ERROR ANALYSIS", "").strip() or response_text[:FALLBACK_ANALYSIS_LENGTH])
+        suggested_direction = (sections.get("## SUGGESTED DIRECTION", "").strip() or "See error analysis for details")
+
+        specific_suggestions = SectionParser.extract_numbered_list(sections.get("## SPECIFIC SUGGESTIONS", ""))
+
+        priority = min(max(SectionParser.extract_priority(sections.get("## PRIORITY", "")), 0.0), 1.0)  
+
+        gradient = TextGradient(
+            failure_examples=failure_examples,
+            success_examples=success_examples,
+            error_analysis=error_analysis,
+            suggested_direction=suggested_direction,
+            specific_suggestions=specific_suggestions,
+            priority=priority,
+        )
+
+        gradient.metadata["batch_index"] = batch_index
+        gradient.metadata["cluster"] = cluster_name
+
+        return gradient
     
-    @staticmethod    
-    def strip_code_fences(text: str) -> str:
-        return re.sub(r'^```.*?\n|\n```$', '', text, flags=re.DOTALL).strip()
+    @staticmethod
+    def _detect_cluster_name(block_text: str, cluster_names: List[str]) -> Optional[str]:
+        for name in cluster_names:
+            if name.lower() in block_text.lower():
+                return name
+        return None
+    
+    @staticmethod
+    def parse_batch_response(response_text: str, batches: List[List[Example]], cluster_names: List[str], success_examples: List[Example]) -> List[TextGradient]:
+        gradients: List[TextGradient] = []
+        blocks = GRADIENT_SPLIT_RE.findall(response_text)
+
+        for idx, block_text in enumerate(blocks):
+            cluster_name = GradientParser._detect_cluster_name(block_text, cluster_names)
+            batch_index = (
+                cluster_names.index(cluster_name)
+                if cluster_name in cluster_names
+                else idx
+            )
+
+            if batch_index >= len(batches):
+                continue
+
+            grad = GradientParser.parse_gradient_response(
+                response_text=block_text,
+                failure_examples=batches[batch_index],
+                success_examples=success_examples,
+                batch_index=batch_index,
+                cluster_name=cluster_name,
+            )
+
+            gradients.append(grad)
+
+        return gradients
+    
+class ClusterParser:
+    @staticmethod
+    def parse_clusters(response_text: str, failure_examples: List[Example]) -> Dict[str, List[Example]]:
+        clusters: Dict[str, List[Example]] = defaultdict(list)
+        current_category: Optional[str] = None
+
+        for line in response_text.splitlines():
+            line = line.strip()
+            if line.startswith("CATEGORY:"):
+                current_category = line.replace("CATEGORY:", "").strip()
+            elif line.startswith("EXAMPLES:") and current_category:
+                indices = [
+                    int(i) - 1
+                    for i in re.findall(r"\d+", line)
+                    if i.isdigit()
+                ]
+                for idx in indices:
+                    if 0 <= idx < len(failure_examples):
+                        clusters[current_category].append(failure_examples[idx])
+
+        return dict(clusters) if clusters else {"all": failure_examples}

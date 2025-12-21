@@ -1,16 +1,7 @@
 from typing import List, Dict, Optional
 from copy import deepcopy
-from evaluator.metrics import (
-    MetricEvaluator,
-    AccuracyMetric,
-    F1ScoreMetric,
-    SafetyMetric,
-    RobustnessMetric,
-    EfficiencyMetric
-)
-import re
+from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric
 from prompts.templates import Templates
-from llm.llm_response_parser import LLMResponseParser
 from data_structures import Example, Metrics, PromptNode, OptimizationConfig
 from llm.llm_client import create_llm
 
@@ -121,15 +112,10 @@ class PromptScorer:
 
         template = Templates.load_template("evaluation")
         prompt = template.format(prompt1=prompt1, prompt2=prompt2)
-        evaluation_prompt = LLMResponseParser.strip_code_fences(self.llm.invoke(prompt=prompt))
         
         try:
-            response = self.llm.invoke(prompt=evaluation_prompt)
-            match = re.search(r'([01](?:\.\d+)?)', response)
-            if not match:
-                raise ValueError("LLM did not return a valid float")
-            value = float(match.group(1))
-            return max(0.0, min(1.0, value))
+            result = self.llm.invoke(prompt=prompt)
+            return max(0.0, min(1.0, float(result)))
         except Exception as e:
             print(f"LLM distance evaluation failed, falling back: {e}")
 

@@ -298,7 +298,6 @@ class LocalOptimizer:
                 variants = self.editor.generate_variants(
                     parent_node.prompt_text,
                     gradient,
-                    num_variants=num_variants,
                     parent_node=parent_node
                 )
                 
