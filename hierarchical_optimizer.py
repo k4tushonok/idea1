@@ -417,7 +417,6 @@ class HierarchicalOptimizer:
             # Статистика компонентов
             "component_statistics": {
                 "history": self.history.get_statistics(),
-                "gradient_generator": self.gradient_gen.get_statistics(),
                 "prompt_editor": self.editor.get_statistics(),
                 "local_optimizer": self.local_optimizer.get_statistics(),
                 "global_optimizer": self.global_optimizer.get_statistics()

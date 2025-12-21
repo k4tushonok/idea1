@@ -2,8 +2,6 @@ import re
 from typing import List, Dict
 
 class LLMResponseParser:
-    """Базовый класс для парсинга LLM ответов"""
-    
     @staticmethod
     def extract_code_blocks(text: str) -> List[str]:
         """Извлечение всех блоков кода из текста"""

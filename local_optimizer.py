@@ -256,9 +256,7 @@ class LocalOptimizer:
             gradients = self.gradient_gen.generate_gradients_batch(
                 node.prompt_text,
                 failure_examples,
-                success_examples,
-                batch_size=self.config.local_batch_size,
-                num_gradients=self.config.local_candidates_per_iteration
+                success_examples
             )
         
         # Добавляем контрастный градиент, если есть хорошие примеры для контраста

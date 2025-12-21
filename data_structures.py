@@ -206,6 +206,7 @@ class OptimizationConfig:
     local_iterations_per_generation: int = 5 # Количество локальных итераций 
     local_candidates_per_iteration: int = 3  # Количество редакций на итерацию (ширина локального поиска)
     local_batch_size: int = 10               # Размер мини-батча для градиентов (число редакций)
+    local_max_examples: int = 10             # Константа для ограничения количества примеров
 
     # Параметры глобальной оптимизации
     global_trigger_interval: int = 3         # Каждые N поколений
