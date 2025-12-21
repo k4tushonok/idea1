@@ -3,12 +3,13 @@ from prompts.templates import Templates
 import random
 from llm.llm_client import create_llm
 from llm.llm_response_parser import GradientParser, ClusterParser
-from data_structures import Example, TextGradient, OptimizationConfig
+from data_structures import Example, TextGradient, OptimizationConfig, PromptNode
 
 DEFAULT_PRIORITY = 0.5
 SUCCESS_EXAMPLE_LIMIT = 5
 CONTRASTIVAE_PRIORITY_BOOST = 0.1
 FAILURE_EXAMPLE_LIMIT = 5
+MAX_SUCCESS_EXAMPLES = 5
 
 class TextGradientGenerator:
     def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
@@ -81,6 +82,27 @@ class TextGradientGenerator:
 
         gradients.sort(key=lambda g: getattr(g, "priority", DEFAULT_PRIORITY), reverse=True)
         return gradients
+    
+    def generate_clustered_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example], context: Dict) -> List[TextGradient]:
+        print("Clustering failures by error type...")
+        clusters = self.cluster_failure_types(failure_examples)
+        gradients: List[TextGradient] = []
+        
+        for name, cluster_failures in clusters.items():
+            if not cluster_failures:
+                continue
+            print(f"  Cluster '{name}': {len(cluster_failures)} failures")
+            gradient = self.generate_gradient(
+                node.prompt_text,
+                cluster_failures[:self.config.local_batch_size],
+                success_examples[:MAX_SUCCESS_EXAMPLES],
+                context
+            )
+            gradient.metadata["cluster"] = name
+            gradients.append(gradient)
+            
+        gradients.sort(key=lambda g: g.priority, reverse=True)
+        return gradients[: self.config.local_candidates_per_iteration]
     
     def generate_contrastive_gradient(self, current_prompt: str, hard_negatives: List[Example], hard_positives: List[Example]) -> TextGradient:
         """Генерация градиента с использованием контрастных примеров"""
