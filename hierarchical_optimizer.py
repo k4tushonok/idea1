@@ -158,8 +158,7 @@ class HierarchicalOptimizer:
                     improved_node = self.local_optimizer.optimize(
                         starting_node=node,
                         train_examples=train_examples,
-                        validation_examples=validation_examples,
-                        num_iterations=self.config.local_iterations_per_generation
+                        validation_examples=validation_examples
                     )
                     
                     new_candidates.append(improved_node)
@@ -190,8 +189,7 @@ class HierarchicalOptimizer:
                             refined = self.local_optimizer.optimize(
                                 starting_node=global_candidate,
                                 train_examples=train_examples,
-                                validation_examples=validation_examples,
-                                num_iterations=self.config.local_iterations_per_generation // 2  # Меньше итераций
+                                validation_examples=validation_examples
                             )
                             new_candidates.append(refined)
                             

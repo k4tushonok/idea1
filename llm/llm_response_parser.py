@@ -94,8 +94,11 @@ class VariantParser:
     @staticmethod
     def extract_prompt(block: str) -> Optional[str]:
         match = PROMPT_BLOCK_RE.search(block)
-        if not match:
-            match = PROMPT_FALLBACK_RE.search(block)
+        if match:
+            return match.group(1).strip()
+        if block and len(block.strip()) >= MIN_PROMPT_LENGTH:
+            return block.strip()
+        match = PROMPT_FALLBACK_RE.search(block)
         return match.group(1).strip() if match else None
 
     @staticmethod
