@@ -1,0 +1,11 @@
+Modify the prompt as follows:
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+MODIFICATION:
+{content}
+
+Apply this modification. Output the complete modified prompt.

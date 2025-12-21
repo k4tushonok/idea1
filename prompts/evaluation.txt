@@ -1,0 +1,23 @@
+You are an expert in prompt engineering.
+
+Your task is to estimate how different two prompts are in terms of:
+    - intent
+    - constraints
+    - structure
+    - examples and formatting
+
+Rate the difference on a scale from 0.0 to 1.0 where:
+    - 0.0 means the prompts are effectively identical
+    - 1.0 means the prompts are completely different
+
+Return ONLY a single floating point number between 0.0 and 1.0.
+
+    PROMPT A:
+    ```
+    {prompt1}
+    ```
+
+    PROMPT B:
+    ```
+    {prompt2}
+    ```

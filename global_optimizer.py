@@ -176,7 +176,7 @@ class GlobalOptimizer:
             similarities = []
             for i in range(len(best_nodes)):
                 for j in range(i+1, len(best_nodes)):
-                    dist = self.editor.calculate_edit_distance(best_nodes[i].prompt_text, best_nodes[j].prompt_text)
+                    dist = self.scorer.calculate_edit_distance(best_nodes[i].prompt_text, best_nodes[j].prompt_text)
                     similarities.append(1.0 - dist)
             avg_similarity = np.mean(similarities) if similarities else 0.0
         else:
@@ -205,7 +205,7 @@ class GlobalOptimizer:
         distances = []
         for i in range(min(20, len(recent_nodes))):  # Ограничиваем для производительности
             for j in range(i+1, min(20, len(recent_nodes))):
-                dist = self.editor.calculate_edit_distance(recent_nodes[i].prompt_text, recent_nodes[j].prompt_text)
+                dist = self.scorer.calculate_edit_distance(recent_nodes[i].prompt_text, recent_nodes[j].prompt_text)
                 distances.append(dist)
         avg_distance = np.mean(distances) if distances else 0.0
         
@@ -334,7 +334,7 @@ class GlobalOptimizer:
     
     def _build_strategy_prompt(self, history_analysis: Dict) -> str:
         """Построение промпта для генерации стратегий. Загружает шаблон из prompts/strategy.txt"""
-        from prompts.loader import load_template
+        from prompts.templates import Templates
         
         summary = history_analysis["summary"]
         patterns = history_analysis["patterns"]
@@ -362,7 +362,7 @@ class GlobalOptimizer:
             unexplored_space_block = "None identified"
         
         # Загружаем шаблон и заполняем его
-        template = load_template("strategy")
+        template = Templates.load_template("strategy")
         prompt = template.format(
             total_nodes=summary['total_nodes'],
             current_generation=summary['current_generation'],
@@ -553,7 +553,7 @@ class GlobalOptimizer:
         if not getattr(self, 'llm', None) or self.llm.provider is None:
             return None
         
-        from prompts.loader import load_template
+        from prompts.templates import Templates
         
         # Получаем лучшие промпты для референса
         best_prompts = analysis["best_elements"]["prompts"]
@@ -564,7 +564,7 @@ class GlobalOptimizer:
             best_prompts_block += f"\nApproach {i}:\n{prompt[:300]}...\n"
         
         # Загружаем шаблон
-        template = load_template("diversify")
+        template = Templates.load_template("diversify")
         diversify_prompt = template.format(best_prompts_block=best_prompts_block, specific_guidance=strategy['action'])
         
         try:
@@ -613,10 +613,10 @@ class GlobalOptimizer:
         if not getattr(self, 'llm', None) or self.llm.provider is None:
             return None
         
-        from prompts.loader import load_template
+        from prompts.templates import Templates
         
         # Загружаем шаблон
-        template = load_template("simplify")
+        template = Templates.load_template("simplify")
         simplify_prompt = template.format(current_prompt=best_node.prompt_text, guidance=strategy['action'])
         
         try:
@@ -824,7 +824,7 @@ class GlobalOptimizer:
             distances = []
             for i in range(min(5, len(current_gen_nodes))):
                 for j in range(i+1, min(5, len(current_gen_nodes))):
-                    dist = self.editor.calculate_edit_distance(
+                    dist = self.scorer.calculate_edit_distance(
                         current_gen_nodes[i].prompt_text,
                         current_gen_nodes[j].prompt_text
                     )

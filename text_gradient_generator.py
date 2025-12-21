@@ -1,8 +1,6 @@
 from typing import List, Dict, Optional
-from prompts.loader import load_template
+from prompts.templates import Templates
 import random
-import re           
-from collections import defaultdict
 from llm.llm_client import create_llm
 from llm.llm_response_parser import LLMResponseParser
 from data_structures import (
@@ -25,8 +23,8 @@ class TextGradientGenerator:
         analysis_prompt = self._build_analysis_prompt(current_prompt, failure_examples, success_examples, context)
         
         try:
-            analysis_text = self.llm.invoke(prompt=analysis_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
-            gradient = self._parse_gradient_response(analysis_text, failure_examples, success_examples)
+            analysis_text = self.llm.invoke(prompt=analysis_prompt)
+            gradient = LLMResponseParser.parse_gradient_response(analysis_text, failure_examples, success_examples)
             return gradient
         except Exception as e:
             print(f"Error generating gradient: {e}")
@@ -80,15 +78,15 @@ class TextGradientGenerator:
         body_parts = []
         for i, batch_failures in enumerate(batches, start=1):
             cluster_name = cluster_names[i - 1]
-            failure_block = self._format_examples(batch_failures, max_count=self.config.local_max_examples)
-            success_section = self._format_examples(success_examples[:5], max_count=5) if success_examples else ""
+            failure_block = Templates.format_examples(batch_failures, max_count=self.config.local_max_examples)
+            success_section = Templates.format_examples(success_examples[:5], max_count=5) if success_examples else ""
             body_parts.append(f"--- CLUSTER: {cluster_name} (SET {i}) ---\n{failure_block}{success_section}")
 
         combined_prompt = header + "\n\n" + "\n\n".join(body_parts)
 
         gradients = []
         try:
-            response_text = self.llm.invoke(prompt=combined_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
+            response_text = self.llm.invoke(prompt=combined_prompt)
             
             splits = response_text.split('### GRADIENT')
             for idx, block in enumerate(splits[1:], start=1):
@@ -112,68 +110,18 @@ class TextGradientGenerator:
         gradients.sort(key=lambda g: getattr(g, "priority", 0.5), reverse=True)
         return gradients
     
-    def _build_analysis_prompt(self, current_prompt: str, failure_examples: List[Example], success_examples: List[Example], context: Optional[Dict]) -> str:
-        """Построение промпта для LLM, который будет анализировать провалы. Шаблон загружается из prompts/analysis.txt"""
-        blocks = {
-            "current_prompt": current_prompt,
-            "failure_examples_block": self._format_examples(failure_examples, max_count=self.config.local_max_examples),
-            "success_examples_section": self._format_examples(success_examples, max_count=self.config.local_max_examples) if success_examples else "",
-            "context_block": ""
-        }
-
-        if context:
-            parts = []
-            if "previous_attempts" in context:
-                parts.append(f"Previous attempts: {context['previous_attempts']}")
-            if "successful_operations" in context:
-                parts.append(f"Successful operations in the past: {context['successful_operations']}")
-            if "generation" in context:
-                parts.append(f"Current generation: {context['generation']}")
-            blocks["context_block"] = "\n".join(parts) or "None"
-
-        template = load_template("analysis")
-        return template.format(**blocks)
-
-    def _parse_gradient_response(self, response_text: str, failure_examples: List[Example], success_examples: List[Example], batch_index: int = None, cluster_name: str = None) -> TextGradient:
-        """Парсинг ответа LLM и извлечение компонентов текстового градиента"""
-        # Используем консолидированный парсер для разбиения на секции
-        markers = ['## ERROR ANALYSIS', '## SUGGESTED DIRECTION', '## SPECIFIC SUGGESTIONS', '## PRIORITY']
-        sections = LLMResponseParser.split_by_markers(response_text, markers)
-        
-        # Извлекаем компоненты из секций
-        error_analysis = sections.get('## ERROR ANALYSIS', '').strip() or response_text[:500]
-        suggested_direction = sections.get('## SUGGESTED DIRECTION', '').strip() or "See error analysis for details"
-
-        # Извлекаем specific suggestions как нумерованный список
-        specific_suggestions = LLMResponseParser.extract_numbered_list(sections.get('## SPECIFIC SUGGESTIONS', ''))
-        
-        # Извлекаем приоритет
-        priority = min(max(LLMResponseParser.extract_priority(sections.get('## PRIORITY', '')), 0.0), 1.0)
-
-        gradient = TextGradient(
-            failure_examples=failure_examples,
-            success_examples=success_examples,
-            error_analysis=error_analysis,
-            suggested_direction=suggested_direction,
-            specific_suggestions=specific_suggestions,
-            priority=priority
-        )
-        gradient.metadata["batch_index"] = batch_index
-        gradient.metadata["cluster"] = cluster_name
-        return gradient
-    
     def generate_contrastive_gradient(self, current_prompt: str, hard_negatives: List[Example], hard_positives: List[Example]) -> TextGradient:
         """Генерация градиента с использованием контрастных примеров"""
-        hard_negatives_block = self._format_examples(hard_negatives, max_count=5)
-        hard_positives_block = self._format_examples(hard_positives, max_count=5)
-        
+        hard_negatives_block = Templates.format_examples(hard_negatives, max_count=5)
+        hard_positives_block = Templates.format_examples(hard_positives, max_count=5)
+
         # Загружаем шаблон
-        template = load_template("contrastive")
+        template = Templates.load_template("contrastive")
         analysis_prompt = template.format(current_prompt=current_prompt, hard_negatives_block=hard_negatives_block, hard_positives_block=hard_positives_block)
         
         try:
-            analysis_text = self.llm.invoke(prompt=analysis_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
-            gradient = self._parse_gradient_response(analysis_text, hard_negatives, hard_positives, batch_index=0, cluster_name="contrastive")
+            analysis_text = self.llm.invoke(prompt=analysis_prompt)
+            gradient = LLMResponseParser.parse_gradient_response(analysis_text, hard_negatives, hard_positives, batch_index=0, cluster_name="contrastive")
             gradient.priority = min(1.0, gradient.priority + 0.1)
             gradient.metadata["type"] = "contrastive"
             return gradient
@@ -191,44 +139,36 @@ class TextGradientGenerator:
         """Кластеризация провалов по типам ошибок"""
         if len(failure_examples) < 5:
             return {"all": failure_examples}
-        
-        examples_block = self._format_examples(failure_examples, max_count=self.config.local_max_examples)
-        template = load_template("clustering")
+
+        examples_block = Templates.format_examples(failure_examples, max_count=self.config.local_max_examples)
+        template = Templates.load_template("clustering")
         clustering_prompt = "Analyze these failure examples and group them by error type.\n\n" + examples_block + template
         
         try:
-            response_text = self.llm.invoke(prompt=clustering_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
-            return self._parse_clusters(response_text, failure_examples)
+            response_text = self.llm.invoke(prompt=clustering_prompt)
+            return LLMResponseParser.parse_clusters(response_text, failure_examples)
         except Exception as e:
             print(f"Error clustering failures: {e}")
             return {"all": failure_examples}        
-    
-    def _format_examples(self, examples: List[Example], max_count: int = None, include_expected: bool = True) -> str:
-        block = ""
-        for i, example in enumerate(examples[:max_count], 1):
-            block += f"Example {i}:\n  Input: {example.input_text}\n"
-            if include_expected:
-                block += f"  Expected: {example.expected_output}\n"
-            block += f"  Actual: {example.actual_output}\n\n"
-        return block
-        
-    def _parse_clusters(self, response_text: str, failure_examples: List[Example]) -> Dict[str, List[Example]]:
-        """Парсинг ответа LLM о кластерах"""
-        clusters = defaultdict(list)
-        lines = response_text.split('\n')
-        current_category = None
-        
-        for line in lines:
-            line = line.strip()
-            if line.startswith("CATEGORY:"):
-                current_category = line.replace("CATEGORY:", "").strip()
-            elif line.startswith("EXAMPLES:") and current_category:
-                matches = [int(m)-1 for m in re.findall(r'\d+', line)]
-                for idx in matches:
-                    if 0 <= idx < len(failure_examples):
-                        clusters[current_category].append(failure_examples[idx])
-        
-        if not clusters:
-            clusters["all"] = failure_examples
-        
-        return dict(clusters)
+      
+    def _build_analysis_prompt(self, current_prompt: str, failure_examples: List[Example], success_examples: List[Example], context: Optional[Dict]) -> str:
+        """Построение промпта для LLM, который будет анализировать провалы. Шаблон загружается из prompts/analysis.txt"""
+        blocks = {
+            "current_prompt": current_prompt,
+            "failure_examples_block": Templates.format_examples(failure_examples, max_count=self.config.local_max_examples),
+            "success_examples_section": Templates.format_examples(success_examples, max_count=self.config.local_max_examples) if success_examples else "",
+            "context_block": ""
+        }
+
+        if context:
+            parts = []
+            if "previous_attempts" in context:
+                parts.append(f"Previous attempts: {context['previous_attempts']}")
+            if "successful_operations" in context:
+                parts.append(f"Successful operations in the past: {context['successful_operations']}")
+            if "generation" in context:
+                parts.append(f"Current generation: {context['generation']}")
+            blocks["context_block"] = "\n".join(parts) or "None"
+
+        template = Templates.load_template("analysis")
+        return template.format(**blocks)

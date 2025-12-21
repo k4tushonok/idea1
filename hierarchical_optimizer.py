@@ -356,7 +356,7 @@ class HierarchicalOptimizer:
             for candidate in remaining:
                 # Вычисляем минимальное расстояние до уже выбранных
                 min_distance = min(
-                    self.editor.calculate_edit_distance(
+                    self.scorer.calculate_edit_distance(
                         candidate.prompt_text,
                         selected_node.prompt_text
                     )
@@ -417,7 +417,6 @@ class HierarchicalOptimizer:
             # Статистика компонентов
             "component_statistics": {
                 "history": self.history.get_statistics(),
-                "prompt_editor": self.editor.get_statistics(),
                 "local_optimizer": self.local_optimizer.get_statistics(),
                 "global_optimizer": self.global_optimizer.get_statistics()
             },

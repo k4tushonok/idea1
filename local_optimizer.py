@@ -388,7 +388,7 @@ class LocalOptimizer:
         print("\n  Top candidates (by base score):")
         for i, cand in enumerate(candidates_sorted[:3], 1):
             score = cand.metrics.composite_score()
-            diversity = self.editor.calculate_edit_distance(
+            diversity = self.scorer.calculate_edit_distance(
                 cand.prompt_text,
                 current_best.prompt_text
             )
@@ -418,7 +418,7 @@ class LocalOptimizer:
             is_duplicate = False
             
             for existing in unique:
-                similarity = 1.0 - self.editor.calculate_edit_distance(
+                similarity = 1.0 - self.scorer.calculate_edit_distance(
                     candidate.prompt_text,
                     existing.prompt_text
                 )

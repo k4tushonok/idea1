@@ -8,6 +8,9 @@ from evaluator.metrics import (
     RobustnessMetric,
     EfficiencyMetric
 )
+import re
+from prompts.templates import Templates
+from llm.llm_response_parser import LLMResponseParser
 from data_structures import Example, Metrics, PromptNode, OptimizationConfig
 from llm.llm_client import create_llm
 
@@ -107,3 +110,32 @@ class PromptScorer:
 
         node.evaluation_examples = { "success": successes, "failures": failures }
         return node
+    
+    def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
+        """
+        Семантическое расстояние между промптами, вычисляемое LLM.
+
+        0.0 — промпты эквивалентны по смыслу и структуре
+        1.0 — промпты принципиально разные
+        """
+
+        template = Templates.load_template("evaluation")
+        prompt = template.format(prompt1=prompt1, prompt2=prompt2)
+        evaluation_prompt = LLMResponseParser.strip_code_fences(self.llm.invoke(prompt=prompt))
+        
+        try:
+            response = self.llm.invoke(prompt=evaluation_prompt)
+            match = re.search(r'([01](?:\.\d+)?)', response)
+            if not match:
+                raise ValueError("LLM did not return a valid float")
+            value = float(match.group(1))
+            return max(0.0, min(1.0, value))
+        except Exception as e:
+            print(f"LLM distance evaluation failed, falling back: {e}")
+
+            words1 = set(prompt1.lower().split())
+            words2 = set(prompt2.lower().split())
+            if not words1 and not words2:
+                return 0.0
+            similarity = len(words1 & words2) / max(len(words1 | words2), 1)
+            return 1.0 - similarity

@@ -1,0 +1,11 @@
+Clarify the following aspect of the prompt:
+
+CURRENT PROMPT:
+```
+{current_prompt}
+```
+
+CLARIFICATION NEEDED:
+{content}
+
+Make the prompt clearer regarding this point. Output the complete modified prompt.
