@@ -1,33 +1,18 @@
-from typing import List, Dict, Optional, Tuple, Callable
-from collections import defaultdict, deque
+from typing import List, Dict, Optional
+from collections import defaultdict
 import json
 import os
 from datetime import datetime
 import numpy as np
+from data_structures import PromptNode, OptimizationSource, OptimizationConfig
 
-from data_structures import (
-    PromptNode, 
-    OptimizationSource, 
-    OptimizationConfig
-)
+DEFAULT_PARETO_METRICS = ("accuracy", "safety", "robustness")
+DEFAULT_STAGNATION_WINDOW = 5
+DEFAULT_MAX_LINEAGE_DEPTH = 10
+DEFAULT_LLM_BATCH_SIZE = 5
 
 class HistoryManager:
-    """
-    Центральное хранилище дерева эволюции промптов
-    Поддерживает:
-    - Добавление и поиск узлов
-    - Анализ истории оптимизации
-    - Поиск лучших промптов
-    - Анализ паттернов успешных изменений
-    """
-    
     def __init__(self, config: OptimizationConfig):
-        """
-        Инициализация менеджера истории
-        
-        Args:
-            config: Конфигурация оптимизации
-        """
         self.config = config                                                          # Конфигурация оптимизации
         self.nodes: Dict[str, PromptNode] = {}                                        # Основное хранилище: id -> PromptNode
         self.nodes_by_generation: Dict[int, List[str]] = defaultdict(list)            # Индекс по поколениям
@@ -36,19 +21,7 @@ class HistoryManager:
         self.total_evaluations = 0                                                    # Общее число оцененных узлов
         self.creation_time = datetime.now()                                           # Время создания истории
     
-    # БАЗОВЫЕ ОПЕРАЦИИ С УЗЛАМИ
-    
     def add_node(self, node: PromptNode) -> str:
-        """
-        Добавление узла в историю
-        Автоматически обновляет индексы и связи
-        
-        Args:
-            node: Узел для добавления
-            
-        Returns:
-            ID добавленного узла
-        """
         # Добавляем в основное хранилище
         self.nodes[node.id] = node
         
@@ -96,102 +69,8 @@ class HistoryManager:
         if not old_node.is_evaluated and node.is_evaluated:
             self.total_evaluations += 1
     
-    def delete_node(self, node_id: str, mode: str = "error"):
-        """
-        Удаление узла из истории.
-
-        Args:
-            node_id: ID удаляемого узла.
-            mode: Поведение при наличии дочерних узлов:
-                - "error" (default): бросить ошибку, если есть дети
-                - "reparent": перевесить детей на родителя (или сделать корневыми, если родителя нет)
-                - "recursive": рекурсивно удалить всех потомков (включая node_id)
-        """
-        if node_id not in self.nodes:
-            return  # ничего делать не нужно
-
-        node = self.nodes[node_id]
-
-        # Обработка детей в зависимости от режима
-        if node.children_ids:
-            if mode == "error":
-                raise RuntimeError(f"Cannot delete node {node_id}: it has children. Use mode='reparent' or mode='recursive'")
-            elif mode == "reparent":
-                parent_id = node.parent_id
-                for child_id in list(node.children_ids):
-                    child = self.nodes.get(child_id)
-                    if child is None:
-                        continue
-                    # Перепривязать child к родителю удаляемого узла
-                    child.parent_id = parent_id
-                    # Убрать child из списка детей удаляемого узла (будет удалено ниже) и добавить к новому родителю (если есть)
-                    if parent_id and parent_id in self.nodes:
-                        parent = self.nodes[parent_id]
-                        if child_id not in parent.children_ids:
-                            parent.children_ids.append(child_id)
-                    else:
-                        # Если родителя нет, то child становится корневым
-                        if child_id not in self.root_ids:
-                            self.root_ids.append(child_id)
-            elif mode == "recursive":
-                # Рекурсивно удаляем всех детей 
-                for child_id in list(node.children_ids):
-                    self.delete_node(child_id, mode="recursive")
-            else:
-                raise ValueError(f"Unknown mode '{mode}' for delete_node")
-
-        # Удаление из индексов
-        gen_list = self.nodes_by_generation.get(node.generation)
-        if gen_list and node_id in gen_list:
-            try:
-                gen_list.remove(node_id)
-            except ValueError:
-                pass
-
-        src_list = self.nodes_by_source.get(node.source)
-        if src_list and node_id in src_list:
-            try:
-                src_list.remove(node_id)
-            except ValueError:
-                pass
-
-        # root ids
-        if node_id in self.root_ids:
-            try:
-                self.root_ids.remove(node_id)
-            except ValueError:
-                pass
-
-        # Связь с родителем
-        if node.parent_id and node.parent_id in self.nodes:
-            parent = self.nodes[node.parent_id]
-            if node_id in parent.children_ids:
-                try:
-                    parent.children_ids.remove(node_id)
-                except ValueError:
-                    pass
-
-        # Уменьшаем счётчик оценок, если нужно
-        if node.is_evaluated and self.total_evaluations > 0:
-            self.total_evaluations -= 1
-
-        # Удалить сам узел
-        if node_id in self.nodes:
-            del self.nodes[node_id]
-    
-    # НАВИГАЦИЯ ПО ДЕРЕВУ
-    
     def get_lineage(self, node_id: str) -> List[PromptNode]:
-        """
-        Получение полной родословной узла (от корня до узла)
-        Полезно для понимания эволюции промпта
-        
-        Args:
-            node_id: ID узла
-            
-        Returns:
-            Список узлов от корня до заданного узла
-        """
+        """Получение полной родословной узла (от корня до узла)"""
         lineage = []
         current_id = node_id
         
@@ -204,8 +83,6 @@ class HistoryManager:
         
         # Разворачиваем, чтобы корень был первым
         return list(reversed(lineage))
-    
-    # ПОИСК И ФИЛЬТРАЦИЯ
     
     def get_nodes_by_generation(self, generation: int) -> List[PromptNode]:
         """Получение всех узлов определенного поколения"""
@@ -221,58 +98,24 @@ class HistoryManager:
         """Получение всех оцененных узлов"""
         return [node for node in self.nodes.values() if node.is_evaluated]
     
-    # АНАЛИЗ И РАНЖИРОВАНИЕ
-    
-    #TODO: не только composite
-    def get_best_nodes(self, top_k: int = 10, metric: str = "composite", generation: Optional[int] = None) -> List[PromptNode]:
-        """
-        Получение лучших узлов по метрике
-        
-        Args:
-            top_k: Количество узлов для возврата
-            metric: Метрика для сортировки ("composite", "accuracy", "safety", etc.)
-            generation: Опционально - только из конкретного поколения
-            
-        Returns:
-            Отсортированный список лучших узлов
-        """
+    def get_best_nodes(self, top_k: int) -> List[PromptNode]:
+        """Получение лучших узлов по метрике"""
         # Фильтруем оцененные узлы
         candidates = self.get_evaluated_nodes()
-        
-        if generation is not None:
-            candidates = [n for n in candidates if n.generation == generation]
         
         if not candidates:
             return []
         
-        # Сортируем по выбранной метрике
-        if metric == "composite":
-            candidates.sort(key=lambda n: n.metrics.composite_score(), reverse=True)
-        elif hasattr(candidates[0].metrics, metric):
-            candidates.sort(key=lambda n: getattr(n.metrics, metric), reverse=True)
-        else:
-            raise ValueError(f"Unknown metric: {metric}")
+        # Сортируем
+        candidates.sort(key=lambda n: n.metrics.composite_score(), reverse=True)
         
         return candidates[:top_k]
     
-    #TODO: улучшить
-    def get_pareto_front(self, metrics: List[str] = None) -> List[PromptNode]:
-        """
-        Нахождение фронта Паретто по нескольким метрикам
-        Узлы на фронте - это те, которые не доминируются другими
-        
-        Args:
-            metrics: Список метрик для рассмотрения (по умолчанию: accuracy, safety, robustness)
-            
-        Returns:
-            Список узлов на фронте Паретто
-        """
-        if metrics is None:
-            metrics = ["accuracy", "safety", "robustness"]
-        
+    def get_pareto_front(self, metrics: List[str] = DEFAULT_PARETO_METRICS) -> List[PromptNode]:
+        """Определение Pareto-front"""
         nodes = self.get_evaluated_nodes()
-        if not nodes:
-            return []
+        if len(nodes) <= 1:
+            return nodes
         
         # Извлекаем значения метрик для каждого узла
         values = []
@@ -311,19 +154,8 @@ class HistoryManager:
         
         return front
     
-    # АНАЛИЗ ПАТТЕРНОВ ОПТИМИЗАЦИИ
-    
     def analyze_successful_operations(self, min_improvement: float = 0.05) -> Dict[str, int]:
-        """
-        Анализ типов операций, которые привели к улучшению
-        Помогает глобальному оптимизатору понять, что работает
-        
-        Args:
-            min_improvement: Минимальное улучшение для считания успешным
-            
-        Returns:
-            Словарь {тип_операции: количество_успехов}
-        """
+        """Анализ типов операций, которые привели к улучшению"""
         operation_counts = defaultdict(int)
         
         for node in self.get_evaluated_nodes():
@@ -335,8 +167,7 @@ class HistoryManager:
                 continue
             
             # Проверяем, есть ли улучшение
-            improvement = (node.metrics.composite_score() - 
-                          parent.metrics.composite_score())
+            improvement = (node.metrics.composite_score() - parent.metrics.composite_score())
             
             if improvement >= min_improvement:
                 # Считаем операции, приведшие к улучшению
@@ -345,17 +176,8 @@ class HistoryManager:
         
         return dict(operation_counts)
     
-    def get_stagnation_info(self, window: int = 5) -> Dict[str, any]:
-        """
-        Определение застоя в оптимизации
-        Используется для early stopping
-        
-        Args:
-            window: Окно последних поколений для анализа
-            
-        Returns:
-            Словарь с информацией о застое
-        """
+    def get_stagnation_info(self, window: int = DEFAULT_STAGNATION_WINDOW) -> Dict[str, any]:
+        """Определение застоя в оптимизации"""
         current_gen = max(self.nodes_by_generation.keys()) if self.nodes_by_generation else 0
         
         if current_gen < window:
@@ -387,19 +209,8 @@ class HistoryManager:
             "recent_scores": recent_best_scores
         }
     
-    # ГЛОБАЛЬНАЯ АНАЛИТИКА ДЛЯ GLOBAL OPTIMIZER
-    
     def get_optimization_summary(self, recent_window: int = 20) -> Dict[str, any]:
-        """
-        Сводка оптимизации для глобального оптимизатора
-        Содержит всю важную информацию для принятия решения о структурных изменениях
-        
-        Args:
-            recent_window: Размер окна последних узлов для анализа
-            
-        Returns:
-            Словарь с полной аналитикой
-        """
+        """Сводка оптимизации для глобального оптимизатора"""
         # Получаем лучшие узлы
         best_nodes = self.get_best_nodes(top_k=5)
         front = self.get_pareto_front()
@@ -447,15 +258,8 @@ class HistoryManager:
             "stagnation_info": stagnation
         }
     
-    # СЕРИАЛИЗАЦИЯ И СОХРАНЕНИЕ
-    
     def save(self, filepath: str):
-        """
-        Сохранение всей истории в файл
-        
-        Args:
-            filepath: Путь к файлу для сохранения
-        """
+        """Сохранение всей истории в файл"""
         data = {
             "config": self.config.to_dict(),
             "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
@@ -472,42 +276,6 @@ class HistoryManager:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
         print(f"History saved to {filepath} ({len(self.nodes)} nodes)")
-    
-    @classmethod
-    def load(cls, filepath: str) -> 'HistoryManager':
-        """
-        Загрузка истории из файла
-        
-        Args:
-            filepath: Путь к файлу
-            
-        Returns:
-            Загруженный HistoryManager
-        """
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Восстанавливаем конфигурацию
-        config = OptimizationConfig.from_dict(data["config"])
-        manager = cls(config)
-        
-        # Восстанавливаем узлы
-        for node_id, node_data in data["nodes"].items():
-            node = PromptNode.from_dict(node_data)
-            manager.nodes[node_id] = node
-            
-            # Восстанавливаем индексы
-            manager.nodes_by_generation[node.generation].append(node_id)
-            manager.nodes_by_source[node.source].append(node_id)
-        
-        manager.root_ids = data["root_ids"]
-        manager.total_evaluations = data["total_evaluations"]
-        manager.creation_time = datetime.fromisoformat(data["creation_time"])
-        
-        print(f"History loaded from {filepath} ({len(manager.nodes)} nodes)")
-        return manager
-    
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     
     def get_statistics(self) -> Dict[str, any]:
         """Общая статистика по истории"""

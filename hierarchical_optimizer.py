@@ -3,12 +3,7 @@ import time
 from datetime import datetime
 import json
 import os
-from data_structures import (
-    Example,
-    PromptNode,
-    OptimizationConfig,
-    OptimizationSource
-)
+from data_structures import Example, PromptNode, OptimizationConfig, OptimizationSource
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
@@ -17,45 +12,15 @@ from local_optimizer import LocalOptimizer
 from global_optimizer import GlobalOptimizer
 
 class HierarchicalOptimizer:
-    """
-    Главный оркестратор иерархической оптимизации промптов
-    
-    Архитектура:
-    1. Локальная оптимизация - детальные улучшения
-    2. Глобальная оптимизация - структурные изменения
-    3. Чередование: N локальных итераций -> 1 глобальный шаг
-    4. Управление популяцией лучших промптов
-    5. Early stopping и конвергенция
-    """
-    
     def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
-        """
-        Args:
-            config: Конфигурация оптимизации
-            api_config: Конфигурация API {"provider": "...", "model": "...", "{provider}_api_key": "..."}
-        """
         self.config = config
         self.api_config = api_config or {}
         
-        # Инициализация компонентов
-        print("Initializing Hierarchical Optimizer...")
-        
-        # History manager
         self.history = HistoryManager(config)
-        
-        # Scorer
         self.scorer = PromptScorer(config=config, api_config=api_config)
-        
-        # Text gradient generator
         self.gradient_gen = TextGradientGenerator(config=config, api_config=api_config)
-        
-        # Prompt editor
         self.editor = PromptEditor(config=config, api_config=api_config)
-        
-        # Local optimizer
         self.local_optimizer = LocalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor)
-        
-        # Global optimizer
         self.global_optimizer = GlobalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, api_config=api_config)
         
         # Метаданные оптимизации
@@ -63,25 +28,8 @@ class HierarchicalOptimizer:
         self.end_time = None
         self.best_node = None
         self.optimization_log = []
-        
-        print("✓ Initialization complete\n")
-    
-    # ОСНОВНОЙ МЕТОД ОПТИМИЗАЦИИ
     
     def optimize(self, initial_prompt: str, train_examples: List[Example], validation_examples: List[Example], test_examples: Optional[List[Example]] = None, save_dir: Optional[str] = None) -> PromptNode:
-        """
-        Запуск полного цикла иерархической оптимизации
-        
-        Args:
-            initial_prompt: Начальный промпт
-            train_examples: Обучающие примеры (для градиентов)
-            validation_examples: Валидационные примеры (для выбора)
-            test_examples: Тестовые примеры (для финальной оценки)
-            save_dir: Директория для сохранения результатов
-            
-        Returns:
-            Лучший найденный PromptNode
-        """
         self.start_time = time.time()
         
         print("="*80)
@@ -133,7 +81,7 @@ class HierarchicalOptimizer:
         
         # Отслеживание для early stopping
         generations_without_improvement = 0
-        generation = 0  # Инициализируем переменную перед циклом
+        generation = 0
         
         # Основной цикл оптимизации
         for generation in range(1, self.config.max_generations + 1):
@@ -293,20 +241,8 @@ class HierarchicalOptimizer:
         
         return self.best_node
     
-    # УПРАВЛЕНИЕ ПОПУЛЯЦИЕЙ
-    
     def _select_population(self, candidates: List[PromptNode], population_size: int) -> List[PromptNode]:
-        """
-        Выбор популяции для следующего поколения
-        Балансирует между качеством (exploitation) и разнообразием (exploration)
-        
-        Args:
-            candidates: Кандидаты для выбора
-            population_size: Размер популяции
-            
-        Returns:
-            Выбранная популяция
-        """
+        """Выбор популяции для следующего поколения"""
         if len(candidates) <= population_size:
             return candidates
         
@@ -379,15 +315,7 @@ class HierarchicalOptimizer:
         
         return selected[:population_size]
     
-    # АНАЛИЗ И ОТЧЕТЫ
-    
     def get_optimization_report(self) -> Dict:
-        """
-        Генерация детального отчета об оптимизации
-        
-        Returns:
-            Словарь с полным отчетом
-        """
         if not self.best_node:
             return {"error": "Optimization not run yet"}
         
@@ -437,12 +365,7 @@ class HierarchicalOptimizer:
         return report
     
     def visualize_optimization_trajectory(self) -> str:
-        """
-        Создание текстовой визуализации траектории оптимизации
-        
-        Returns:
-            Строка с визуализацией
-        """
+        """Создание текстовой визуализации траектории оптимизации"""
         if not self.optimization_log:
             return "No optimization data available"
         
@@ -470,8 +393,6 @@ class HierarchicalOptimizer:
         viz += "\n" + "="*80 + "\n"
         
         return viz
-    
-    # СОХРАНЕНИЕ И ЗАГРУЗКА
     
     def _save_checkpoint(self, save_dir: str, generation: int):
         """Сохранение checkpoint'а"""
@@ -512,19 +433,8 @@ class HierarchicalOptimizer:
         print(f"  - best_prompt.txt")
         print(f"  - trajectory.txt")
 
-    # СРАВНЕНИЕ С BASELINE
-    
     def compare_with_baseline(self, baseline_prompt: str, test_examples: List[Example]) -> Dict:
-        """
-        Сравнение оптимизированного промпта с baseline
-        
-        Args:
-            baseline_prompt: Baseline промпт
-            test_examples: Тестовые примеры
-            
-        Returns:
-            Словарь с результатами сравнения
-        """
+        """Сравнение оптимизированного промпта с baseline"""
         if not self.best_node:
             raise ValueError("Optimization not run yet")
         
