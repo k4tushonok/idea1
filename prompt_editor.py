@@ -90,3 +90,75 @@ class PromptEditor:
             source=OptimizationSource.GLOBAL,
             operations=[operation]
         )
+        
+    def apply_editor_op(self, best_node: PromptNode, op_type: OperationType, action: str, generation: int, strategy: Dict) -> PromptNode:
+        node = self.apply_specific_operation(best_node.prompt_text, op_type, action, parent_node=best_node)
+        node.generation = generation
+        node.metadata["global_strategy"] = strategy
+        return node 
+    
+    def apply_specialize_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Специализация промпта"""
+        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        return self.apply_editor_op(best_node, OperationType.ADD_CONSTRAINT, strategy["action"], generation, strategy)
+    
+    def apply_expand_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Расширение промпта"""
+        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        return self.apply_editor_op(best_node, OperationType.ADD_INSTRUCTION, strategy["action"], generation, strategy)
+
+    def apply_restructure_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Реструктуризация промпта"""
+        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        return self.apply_editor_op(best_node, OperationType.RESTRUCTURE, strategy["action"], generation, strategy)
+
+    def apply_generic_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Общий подход для неизвестных типов стратегий"""
+        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        return self.apply_editor_op(best_node, OperationType.MODIFY_INSTRUCTION, strategy["action"], generation, strategy)
+    
+    def apply_simplify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Упрощение промпта"""
+        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        simplify_prompt = Templates.build_simplify_prompt(best_node.prompt_text, strategy['action'])
+        try:
+            simplified_text = self.llm.invoke(prompt=simplify_prompt)
+            operation = EditOperation(operation_type=OperationType.REPHRASE, description=f"SIMPLIFY: {strategy['description']}")
+            node = PromptNode(
+                prompt_text=simplified_text,
+                generation=generation,
+                source=OptimizationSource.GLOBAL,
+                operations=[operation],
+                metadata={"global_strategy": strategy}
+            )
+            return node
+        except Exception as e:
+            print(f"    Error in simplify: {e}")
+            return None
+        
+    def apply_diversify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Создание разнообразного промпта"""
+        diversify_prompt = Templates.build_diversify_prompt(analysis["best_elements"]["prompts"], strategy['action'])
+        try:
+            new_prompt_text = self.llm.invoke(prompt=diversify_prompt)
+            operation = EditOperation(operation_type=OperationType.RESTRUCTURE, description=f"DIVERSIFY: {strategy['description']}")
+            node = PromptNode(
+                prompt_text=new_prompt_text,
+                generation=generation,
+                source=OptimizationSource.GLOBAL,
+                operations=[operation],
+                metadata={"global_strategy": strategy}
+            )
+            return node
+        except Exception as e:
+            print(f"    Error in diversify: {e}")
+            return None
+        
+    def apply_combine_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+        """Комбинирование лучших промптов"""
+        combined_node = self.combine_prompts(analysis["best_elements"]["prompts"][:3], combination_strategy="best_elements")
+        combined_node.generation = generation
+        combined_node.source = OptimizationSource.GLOBAL
+        combined_node.metadata["global_strategy"] = strategy
+        return combined_node
+

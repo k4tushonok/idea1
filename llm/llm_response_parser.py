@@ -232,3 +232,30 @@ class ClusterParser:
                         clusters[current_category].append(failure_examples[idx])
 
         return dict(clusters) if clusters else {"all": failure_examples}
+    
+class StrategyParser:
+    @staticmethod
+    def parse_strategies(response_text: str) -> List[Dict]:
+        strategies = []
+        strategy_blocks = re.split(r'STRATEGY\s+\d+:', response_text)
+        
+        for block in strategy_blocks[1:]:
+            try:
+                type_match = re.search(r'TYPE:\s*(\w+)', block)
+                desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL)
+                rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL)
+                action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL)
+                
+                if type_match and desc_match:
+                    strategy = {
+                        "type": type_match.group(1).strip().upper(),
+                        "description": desc_match.group(1).strip(),
+                        "rationale": rationale_match.group(1).strip() if rationale_match else "",
+                        "action": action_match.group(1).strip() if action_match else ""
+                    }
+                    strategies.append(strategy)
+            except Exception as e:
+                print(f"Error parsing strategy block: {e}")
+                continue
+        
+        return strategies

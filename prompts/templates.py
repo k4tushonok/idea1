@@ -123,6 +123,66 @@ class Templates:
         return combining_prompt
     
     @staticmethod
+    def build_diversify_prompt(prompts: List[str], strategy: str) -> str:
+        best_prompts_block = ""
+        for i, prompt in enumerate(prompts[:2], 1):
+            best_prompts_block += f"\nApproach {i}:\n{prompt[:300]}...\n"
+        template = Templates.load_template("diversify")
+        return template.format(best_prompts_block=best_prompts_block, specific_guidance=strategy)
+    
+    @staticmethod
+    def build_simplify_prompt(prompt: str, strategy: str) -> str:
+        template = Templates.load_template("simplify")
+        return template.format(current_prompt=prompt, guidance=strategy)
+    
+    @staticmethod
+    def build_strategy_prompt(history_analysis: Dict) -> str:
+        summary = history_analysis["summary"]
+        patterns = history_analysis["patterns"]
+        stagnation = history_analysis["stagnation"]
+        diversity = history_analysis["diversity"]
+        
+        best_prompts_block = ""
+        for i, node_info in enumerate(summary['best_nodes'][:3], 1):
+            best_prompts_block += f"{i}. Score {node_info['score']:.3f} (Gen {node_info['generation']}):\n"
+            best_prompts_block += f"   {node_info['prompt_preview']}\n\n"
+        
+        failed_directions_block = ""
+        if history_analysis.get("failed_directions"):
+            for direction in history_analysis["failed_directions"]:
+                failed_directions_block += f"- {direction}\n"
+        else:
+            failed_directions_block = "None identified"
+        
+        unexplored_space_block = ""
+        if history_analysis.get("unexplored_space"):
+            for area in history_analysis["unexplored_space"]:
+                unexplored_space_block += f"- {area}\n"
+        else:
+            unexplored_space_block = "None identified"
+        
+        template = Templates.load_template("strategy")
+        prompt = template.format(
+            total_nodes=summary['total_nodes'],
+            current_generation=summary['current_generation'],
+            best_score=summary['best_nodes'][0]['score'] if summary['best_nodes'] else 0.0,
+            pareto_front_size=summary['pareto_front_size'],
+            successful_operations=patterns['successful_operations'],
+            avg_path_length=patterns['avg_path_length'],
+            is_stagnant=stagnation['is_stagnant'],
+            stagnation_best_score=stagnation['best_score'],
+            avg_similarity=stagnation['avg_similarity'],
+            needs_exploration=stagnation['needs_exploration'],
+            diversity_score=diversity['diversity_score'],
+            needs_diversification=diversity['needs_diversification'],
+            best_prompts_block=best_prompts_block,
+            failed_directions_block=failed_directions_block,
+            unexplored_space_block=unexplored_space_block
+        )
+        
+        return prompt
+    
+    @staticmethod
     def build_editing_prompt(current_prompt: str, gradient: TextGradient, num_variants: int) -> str:
         suggestions = "\n".join(f"{i}. {s}" for i, s in enumerate(gradient.specific_suggestions, 1))
 

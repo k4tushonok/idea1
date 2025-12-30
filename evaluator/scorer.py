@@ -125,3 +125,10 @@ class PromptScorer:
                 return 0.0
             similarity = len(words1 & words2) / max(len(words1 | words2), 1)
             return 1.0 - similarity
+
+    def calculate_pairwise_metric(self, nodes: List[PromptNode], max_distance_pairs: int) -> List[float]:
+        values = []
+        for i in range(min(len(nodes), max_distance_pairs)):
+            for j in range(i + 1, min(len(nodes), max_distance_pairs)):
+                values.append(self.calculate_edit_distance(nodes[i].prompt_text, nodes[j].prompt_text))
+        return values
