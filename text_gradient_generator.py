@@ -1,28 +1,21 @@
 from typing import List, Dict, Optional
 from prompts.templates import Templates
 import random
-from llm.llm_client import create_llm
+from llm.llm_client import BaseLLM
 from llm.llm_response_parser import GradientParser, ClusterParser
-from data_structures import Example, TextGradient, OptimizationConfig, PromptNode
-
-DEFAULT_PRIORITY = 0.5
-SUCCESS_EXAMPLE_LIMIT = 5
-CONTRASTIVAE_PRIORITY_BOOST = 0.1
-FAILURE_EXAMPLE_LIMIT = 5
-MAX_SUCCESS_EXAMPLES = 5
+from data_structures import Example, TextGradient, PromptNode
+from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_ITERATION, MAX_SUCCESS_EXAMPLES, SUCCESS_EXAMPLE_LIMIT, DEFAULT_PRIORITY, CONTRASTIVAE_PRIORITY_BOOST, FAILURE_EXAMPLE_LIMIT, BATCH_SUCCESS_EXAMPLE_LIMIT
 
 class TextGradientGenerator:
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
-        self.config = config
-        self.api_config = api_config or {}
-        self.llm = create_llm(self.config, self.api_config)
+    def __init__(self, llm: BaseLLM):
+        self.llm = llm
 
     def generate_gradient(self, current_prompt: str, failure_examples: List[Example], success_examples: List[Example] = None, context: Optional[Dict] = None) -> TextGradient:
         """Генерация одного текстового градиента"""
         if not failure_examples:
             raise ValueError("Need at least one failure example to generate gradient")
 
-        analysis_prompt = Templates.build_analysis_prompt(current_prompt, failure_examples, success_examples, context, self.config.local_max_examples)
+        analysis_prompt = Templates.build_analysis_prompt(current_prompt, failure_examples, success_examples, context, LOCAL_MAX_EXAMPLES)
 
         try:
             analysis_text = self.llm.invoke(prompt=analysis_prompt)
@@ -40,9 +33,6 @@ class TextGradientGenerator:
     
     def generate_gradients_batch(self, current_prompt: str, failure_examples: List[Example], success_examples: List[Example] = None) -> List[TextGradient]:
         """Генерация нескольких градиентов"""
-        batch_size = self.config.local_batch_size
-        num_gradients=self.config.local_candidates_per_iteration
-        
         if not failure_examples:
             return []   
           
@@ -51,27 +41,27 @@ class TextGradientGenerator:
 
         # Сортируем кластеры по размеру (большие сначала) и ограничиваем количеством градиентов
         cluster_items = sorted(list(clusters.items()), key=lambda kv: len(kv[1]), reverse=True)
-        selected = cluster_items[:min(num_gradients, len(cluster_items))]
+        selected = cluster_items[:min(LOCAL_CANDIDATES_PER_ITERATION, len(cluster_items))]
 
         # Создаём батчи — максимум по batch_size примеров из каждого кластера
         batches: List[List[Example]] = []
         cluster_names: List[str] = []
         for name, examples in selected:
             cluster_names.append(name)
-            batches.append(examples[:batch_size])
+            batches.append(examples[:LOCAL_BATCH_SIZE])
 
         if not batches:  # fallback к случайным батчам
-            for i in range(num_gradients):
-                sampled_indices = random.sample(range(len(failure_examples)), k=min(batch_size, len(failure_examples)))
+            for i in range(LOCAL_CANDIDATES_PER_ITERATION):
+                sampled_indices = random.sample(range(len(failure_examples)), k=min(LOCAL_BATCH_SIZE, len(failure_examples)))
                 batches.append([failure_examples[j] for j in sampled_indices])
                 cluster_names.append(f"cluster_{i}")
 
         gradients = []
-        combined_prompt = Templates.build_gradients_batch_prompt(batches, cluster_names, success_examples, max_count=self.config.local_max_examples)
+        combined_prompt = Templates.build_gradients_batch_prompt(batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES)
         
         try:
             response_text = self.llm.invoke(prompt=combined_prompt)
-            gradients = GradientParser.parse_batch_response(response_text=response_text, batches=batches, cluster_names=cluster_names, success_examples=success_examples[:5] if success_examples else [])
+            gradients = GradientParser.parse_batch_response(response_text=response_text, batches=batches, cluster_names=cluster_names, success_examples=success_examples[:BATCH_SUCCESS_EXAMPLE_LIMIT] if success_examples else [])
         except Exception as e:
             print(f"Batch LLM call failed, falling back to per-gradient calls: {e}")
             for batch_index, batch_failures in enumerate(batches):
@@ -94,7 +84,7 @@ class TextGradientGenerator:
             print(f"  Cluster '{name}': {len(cluster_failures)} failures")
             gradient = self.generate_gradient(
                 node.prompt_text,
-                cluster_failures[:self.config.local_batch_size],
+                cluster_failures[:LOCAL_BATCH_SIZE],
                 success_examples[:MAX_SUCCESS_EXAMPLES],
                 context
             )
@@ -102,7 +92,7 @@ class TextGradientGenerator:
             gradients.append(gradient)
             
         gradients.sort(key=lambda g: g.priority, reverse=True)
-        return gradients[: self.config.local_candidates_per_iteration]
+        return gradients[:LOCAL_CANDIDATES_PER_ITERATION]
     
     def generate_contrastive_gradient(self, current_prompt: str, hard_negatives: List[Example], hard_positives: List[Example]) -> TextGradient:
         """Генерация градиента с использованием контрастных примеров"""
@@ -129,7 +119,7 @@ class TextGradientGenerator:
         if len(failure_examples) < FAILURE_EXAMPLE_LIMIT:
             return {"all": failure_examples}
 
-        clustering_prompt = Templates.build_clustering_prompt(failure_examples, max_count=self.config.local_max_examples)
+        clustering_prompt = Templates.build_clustering_prompt(failure_examples, max_count=LOCAL_MAX_EXAMPLES)
         
         try:
             response_text = self.llm.invoke(prompt=clustering_prompt)

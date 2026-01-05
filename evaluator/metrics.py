@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from abc import ABC, abstractmethod
-from data_structures import OptimizationConfig, Example
+from data_structures import Example
 from llm.llm_client import BaseLLM
 import json
 
@@ -8,18 +8,18 @@ class MetricEvaluator(ABC):
     """Базовый класс метрики"""
     name: str
 
-    def __init__(self, config: OptimizationConfig = None):
-        self.config = config
+    def __init__(self):
+        pass
 
     @abstractmethod
-    def evaluate(self, prompt: str, examples: List[Example], judge_llm: BaseLLM) -> float:
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM) -> float:
         """Возвращает оценку промпта от 0.0 до 1.0"""
         pass
 
 class LLMJudgeMetric(MetricEvaluator):
     """Метрика, использующая LLM для оценки ответов"""
 
-    def evaluate(self, prompt: str, examples: List[Example], judge_llm: BaseLLM) -> float:
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM) -> float:
         if not examples:
             return 0.0
 
@@ -35,11 +35,7 @@ class LLMJudgeMetric(MetricEvaluator):
                 actual=ex.actual_output
             )
 
-            raw = judge_llm.invoke(
-                prompt=judge_prompt,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-            )
+            raw = llm.invoke(prompt=judge_prompt)
             parsed = self._parse_judge_output(raw)
             scores.append(parsed["score"])
 

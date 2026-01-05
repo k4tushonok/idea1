@@ -1,19 +1,15 @@
 from typing import List, Dict, Optional, Set
 import time
 import random
-from data_structures import Example, PromptNode, TextGradient, OptimizationConfig
+from data_structures import Example, PromptNode, TextGradient
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
-
-CLUSTERING_FAILURE_MULTIPLIER = 2
-MIN_EXAMPLES_FOR_CONTRASTIVE = 5
-MAX_CONTEXT_OPERATIONS = 5
+from config import LOCAL_ITERATIONS_PER_GENERATION, MIN_IMPROVEMENT, LOCAL_BATCH_SIZE, CLUSTERING_FAILURE_MULTIPLIER, MAX_CONTEXT_OPERATIONS, MIN_EXAMPLES_FOR_CONTRASTIVE, PATIENCE, SIMILARITY_THRESHOLD
 
 class LocalOptimizer:
-    def __init__(self, config: OptimizationConfig, history_manager: HistoryManager, scorer: PromptScorer, gradient_generator: TextGradientGenerator, prompt_editor: PromptEditor):
-        self.config = config
+    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, gradient_generator: TextGradientGenerator, prompt_editor: PromptEditor):
         self.history = history_manager
         self.scorer = scorer
         self.gradient_gen = gradient_generator
@@ -30,8 +26,6 @@ class LocalOptimizer:
     def optimize(self, starting_node: PromptNode, train_examples: List[Example], validation_examples: List[Example]) -> PromptNode:
         print(f"\n{'='*60}")
         print(f"Starting Local Optimization")
-        print(f"Starting node: {starting_node.id} (gen {starting_node.generation})")
-        print(f"Max iterations: {self.config.local_iterations_per_generation}")
         print(f"{'='*60}\n")
         
         # Добавляем начальный узел в историю, если его там нет
@@ -51,7 +45,7 @@ class LocalOptimizer:
         no_improve_iters = 0
         
         # Основной цикл оптимизации
-        for iteration in range(self.config.local_iterations_per_generation):
+        for iteration in range(LOCAL_ITERATIONS_PER_GENERATION):
             iteration_start_time = time.time()
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
@@ -85,7 +79,7 @@ class LocalOptimizer:
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
                 
                 # Проверяем, есть ли улучшение
-                if candidate_score + 1e-8 >= best_score + self.config.min_improvement:
+                if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
                     print(f"✓ Improvement found! New best: {candidate_score:.3f}")
                     current_best = best_candidate
                     best_score = candidate_score
@@ -112,7 +106,7 @@ class LocalOptimizer:
             self.total_iterations += 1
             
             # Early stopping
-            if no_improve_iters >= self.config.patience:
+            if no_improve_iters >= PATIENCE:
                 print(f"\nEarly stopping after {no_improve_iters} iterations without improvement")
                 break
         
@@ -130,8 +124,8 @@ class LocalOptimizer:
         if node.is_evaluated and node.evaluation_examples.get("failures"):
             failures = node.evaluation_examples["failures"]
             # Если провалов много, берем случайное подмножество для разнообразия
-            if len(failures) > self.config.local_batch_size:
-                failures = random.sample(failures, self.config.local_batch_size)
+            if len(failures) > LOCAL_BATCH_SIZE:
+                failures = random.sample(failures, LOCAL_BATCH_SIZE)
             return failures
         
         # Иначе выполняем промпт на примерах
@@ -153,13 +147,13 @@ class LocalOptimizer:
                 context["successful_operations"] = list(successful_ops.keys())[:MAX_CONTEXT_OPERATIONS]
         
         # Опция 1: Кластеризация провалов и генерация градиентов для каждого кластера
-        if len(failure_examples) > self.config.local_batch_size * CLUSTERING_FAILURE_MULTIPLIER:
+        if len(failure_examples) > LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
             gradients = self.gradient_gen.generate_clustered_gradients(node, failure_examples, success_examples, context)
         # Опция 2: Батчевая генерация градиентов
         else:
             gradients = self.gradient_gen.generate_gradients_batch(node.prompt_text, failure_examples, success_examples)
 
-        # Добавляем контрастный градиент, если есть хорошие примеры для контраста
+        # Добавляем контрастный градиент, если есть примеры для контраста
         if len(success_examples) >= MIN_EXAMPLES_FOR_CONTRASTIVE and len(failure_examples) >= MIN_EXAMPLES_FOR_CONTRASTIVE:
             print("Generating contrastive gradient...")
             try:
@@ -187,7 +181,7 @@ class LocalOptimizer:
         unique: List[PromptNode] = []
         for candidate in all_candidates:
             is_duplicate = any(
-                1.0 - self.scorer.calculate_edit_distance(candidate.prompt_text, u.prompt_text) > self.config.similarity_threshold
+                1.0 - self.scorer.calculate_edit_distance(candidate.prompt_text, u.prompt_text) > SIMILARITY_THRESHOLD
                 for u in unique
             )
             if not is_duplicate:
@@ -223,12 +217,6 @@ class LocalOptimizer:
             return None
         
         candidates_sorted = sorted(candidates, key=lambda c: c.metrics.composite_score(), reverse=True)
-        
-        # Выводим топ-3 для информации
-        print("\n  Top candidates (by score):")
-        for i, cand in enumerate(candidates_sorted[:3], 1):
-            score = cand.metrics.composite_score()
-            print(f"    {i}. Score: {score:.3f}")
         return candidates_sorted[0]
     
     def get_statistics(self) -> Dict:

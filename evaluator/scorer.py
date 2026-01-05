@@ -2,54 +2,26 @@ from typing import List, Dict, Optional
 from copy import deepcopy
 from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric
 from prompts.templates import Templates
-from data_structures import Example, Metrics, PromptNode, OptimizationConfig
-from llm.llm_client import create_llm
+from data_structures import Example, Metrics, PromptNode
+from llm.llm_client import BaseLLM
+from config import METRIC_WEIGHTS
 
 class PromptScorer:
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
-        self.config = config
-        self.api_config = api_config or {}
-
-        # Основной LLM для генерации ответов
-        self.llm = create_llm(self.config, self.api_config)
-        # LLM для оценки
-        self.judge_llm = create_llm(self.config, self.api_config)
-
+    def __init__(self, llm: BaseLLM):
+        self.llm = llm
+        
         # Регистрируем метрики
         self.metrics: Dict[str, MetricEvaluator] = {}
         for metric_cls in [AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric]:
-            metric = metric_cls(config=self.config)
+            metric = metric_cls()
             self.metrics[metric.name] = metric
 
-        self._sync_metric_weights()
         self._last_eval_examples: Optional[List[Example]] = None
-
-    def _sync_metric_weights(self):
-        """
-            Нормализует веса метрик на основе config.metric_weights
-            Если веса не заданы или сумма ≤ 0, задаёт равные веса
-            Иначе нормализует их так, чтобы сумма всех весов была 1
-        """
-        n = len(self.metrics) or 1
-        weights: Dict[str, float] = {}
-        
-        for name in self.metrics:
-            weights[name] = self.config.metric_weights.get(name, 1.0 / n)
-        
-        total = sum(weights.values())
-        if total <= 0:
-            for name in weights:
-                weights[name] = 1.0 / n
-        else:
-            for name in weights:
-                weights[name] /= total
-
-        self.config.metric_weights = weights
 
     def execute_prompt(self, prompt: str, input_text: str) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
-        return self.llm.invoke(prompt=full_prompt, temperature=self.config.temperature, max_tokens=self.config.max_tokens)
+        return self.llm.invoke(prompt=full_prompt)
 
     def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
         """Применяет промпт ко всему списку примеров. Для каждого Example сохраняет actual_output"""
@@ -71,14 +43,14 @@ class PromptScorer:
 
         # Создаём объект Metrics и задаём веса из конфига
         metrics = Metrics()
-        metrics.weights = self.config.metric_weights.copy()
+        metrics.weights = METRIC_WEIGHTS.copy()
 
         for name, metric in self.metrics.items():
-            weight = self.config.metric_weights.get(name, 0.0)
+            weight = METRIC_WEIGHTS.get(name, 0.0)
             if weight <= 0:
                 metrics.metrics[name] = 0.0
                 continue
-            score = metric.evaluate(prompt=prompt, examples=eval_examples, judge_llm=self.judge_llm)
+            score = metric.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
             metrics.metrics[name] = float(score)
 
         return metrics

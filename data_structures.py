@@ -3,6 +3,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 import uuid
+from config import METRIC_WEIGHTS, LINEAGE_RECENT_OPS_LIMIT
 
 class OptimizationSource(Enum):
     """Источник оптимизации промпта"""
@@ -108,19 +109,12 @@ class Metrics:
         "efficiency": 0.0,
         "f1": 0.0
     })
-    weights: Dict[str, float] = field(default_factory=lambda: {
-        "accuracy": 0.5,
-        "safety": 0.2,
-        "robustness": 0.1,
-        "efficiency": 0.1,
-        "f1": 0.1
-    })
 
     def composite_score(self) -> float:
         """Вычисление композитной оценки как взвешенной суммы метрик"""
-        keys = set(list(self.metrics.keys()) + list(self.weights.keys()))
-        return sum(self.metrics.get(k, 0.0) * self.weights.get(k, 0.0) for k in keys)
-    
+        keys = set(list(self.metrics.keys()) + list(METRIC_WEIGHTS.keys()))
+        return sum(self.metrics.get(k, 0.0) * METRIC_WEIGHTS.get(k, 0.0) for k in keys)
+
     def to_dict(self) -> Dict:
         d = self.metrics.copy()
         d["composite_score"] = self.composite_score()
@@ -137,16 +131,16 @@ class Metrics:
 @dataclass
 class PromptNode:
     """Узел в дереве эволюции промптов. Хранит полную информацию о промпте и его происхождении"""
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    prompt_text: str = ""
-    parent_id: Optional[str] = None
-    children_ids: List[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))                      # Уникальный идентификатор промпта
+    prompt_text: str = ""                                                           # Текст промпта
+    parent_id: Optional[str] = None                                                 # Идентификатор родительского промпта
+    children_ids: List[str] = field(default_factory=list)                           # Идентификаторы дочерних промптов
     generation: int = 0                                                             # Номер поколения (глубина в дереве)
-    source: OptimizationSource = OptimizationSource.INITIAL
+    source: OptimizationSource = OptimizationSource.INITIAL                         # Источник оптимизации
     operations: List[EditOperation] = field(default_factory=list)                   # История изменений
     metrics: Metrics = field(default_factory=Metrics)                               # Оценка промпта
-    timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)                       # Временная метка
+    metadata: Dict[str, Any] = field(default_factory=dict)                          # Дополнительные метаданные
     is_evaluated: bool = False                                                      # Оценен ли промпт
     is_front: bool = False                                                          # На фронте Парето (по нескольким метрикам)
     evaluation_examples: Dict[str, List[Example]] = field(default_factory=lambda: { # Примеры, на которых оценивался промпт
@@ -161,7 +155,7 @@ class PromptNode:
     
     def get_lineage_summary(self) -> str:
         """Краткая сводка о происхождении промпта. Полезно для передачи LLM в контексте оптимизации"""
-        ops_summary = ", ".join([op.operation_type.value for op in self.operations[-3:]])
+        ops_summary = ", ".join([op.operation_type.value for op in self.operations[-LINEAGE_RECENT_OPS_LIMIT:]])
         return f"Gen {self.generation}, Source: {self.source.value}, Recent ops: [{ops_summary}], Score: {self.metrics.composite_score():.3f}"
     
     def to_dict(self) -> Dict:
@@ -197,50 +191,4 @@ class PromptNode:
             "failures": [Example.from_dict(ex) for ex in data["evaluation_examples"]["failures"]]
         }
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
-        return cls(**data)
-
-@dataclass
-class OptimizationConfig:
-    """Конфигурация процесса оптимизации"""
-    # Параметры локальной оптимизации
-    local_iterations_per_generation: int = 5 # Количество локальных итераций 
-    local_candidates_per_iteration: int = 3  # Количество редакций на итерацию (ширина локального поиска)
-    local_batch_size: int = 10               # Размер мини-батча для градиентов (число редакций)
-    local_max_examples: int = 10             # Константа для ограничения количества примеров
-
-    # Параметры глобальной оптимизации
-    global_trigger_interval: int = 3         # Каждые N поколений
-    global_candidates: int = 3               # Ширина глобального поиска
-    global_history_window: int = 20          # Сколько узлов истории анализировать
-    
-    # Общие параметры
-    max_generations: int = 10                # Максимальное число поколений
-    population_size: int = 5                 # Сколько промптов держим в активном пуле
-    
-    # Early stopping
-    patience: int = 3                        # Поколений без улучшения до остановки
-    min_improvement: float = 0.01            # Минимальное улучшение для продолжения
-    
-    # Diversity control
-    diversity_bonus: float = 0.05            # Бонус за разнообразие
-    similarity_threshold: float = 0.9        # Порог схожести
-    
-    # API параметры
-    temperature: float = 0.7
-    max_tokens: int = 2000
-    
-    # Метрики и оценка
-    metric_weights: Dict[str, float] = field(default_factory=lambda: {
-        "accuracy": 0.5,
-        "safety": 0.2,
-        "robustness": 0.2,
-        "efficiency": 0.1,
-        "f1": 0.0
-    })
-    
-    def to_dict(self) -> Dict:
-        return asdict(self)
-    
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'OptimizationConfig':
         return cls(**data)

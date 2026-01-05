@@ -1,19 +1,18 @@
 from typing import List, Dict, Optional
-from llm.llm_client import create_llm
+from llm.llm_client import BaseLLM
 from llm.llm_response_parser import MarkdownParser
 from llm.llm_response_parser import VariantParser
 from prompts.templates import Templates
-from data_structures import TextGradient, EditOperation, OperationType, PromptNode, OptimizationSource, OptimizationConfig
+from data_structures import TextGradient, EditOperation, OperationType, PromptNode, OptimizationSource
+from config import LOCAL_CANDIDATES_PER_ITERATION, MAX_PROMPTS_TO_COMBINE
 
 class PromptEditor:
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
-        self.config = config
-        self.api_config = api_config or {}
-        self.llm = create_llm(self.config, self.api_config)
-    
+    def __init__(self, llm: BaseLLM):
+        self.llm = llm
+
     def generate_variants(self, current_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode] = None) -> List[PromptNode]:
         """Генерация вариантов промпта на основе текстового градиента"""
-        editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, self.config.local_candidates_per_iteration)
+        editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, LOCAL_CANDIDATES_PER_ITERATION)
         try:
             response_text = self.llm.invoke(prompt=editing_prompt)
             variants = VariantParser.parse_variants(response_text, current_prompt, gradient, parent_node)
@@ -156,7 +155,7 @@ class PromptEditor:
         
     def apply_combine_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Комбинирование лучших промптов"""
-        combined_node = self.combine_prompts(analysis["best_elements"]["prompts"][:3], combination_strategy="best_elements")
+        combined_node = self.combine_prompts(analysis["best_elements"]["prompts"][:MAX_PROMPTS_TO_COMBINE], combination_strategy="best_elements")
         combined_node.generation = generation
         combined_node.source = OptimizationSource.GLOBAL
         combined_node.metadata["global_strategy"] = strategy

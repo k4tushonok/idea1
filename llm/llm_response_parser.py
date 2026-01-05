@@ -3,10 +3,7 @@ from typing import List, Dict
 from collections import defaultdict
 from data_structures import Example, TextGradient, PromptNode, EditOperation, OperationType, OptimizationSource
 from typing import Optional
-
-MIN_PROMPT_LENGTH = 20
-FALLBACK_ANALYSIS_LENGTH = 500
-DEFAULT_PRIORITY = 0.5
+from config import MIN_PROMPT_LENGTH, DEFAULT_PRIORITY, FALLBACK_ANALYSIS_LENGTH, MIN_LIST_ITEM_LENGTH
 
 SECTION_MARKERS = [
     "## ERROR ANALYSIS",
@@ -77,7 +74,7 @@ class SectionParser:
         if current:
             items.append(current.strip())
 
-        return [i for i in items if len(i) > 5]
+        return [i for i in items if len(i) > MIN_LIST_ITEM_LENGTH]
     
     @staticmethod
     def extract_priority(text: str) -> float:

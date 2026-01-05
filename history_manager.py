@@ -4,16 +4,11 @@ import json
 import os
 from datetime import datetime
 import numpy as np
-from data_structures import PromptNode, OptimizationSource, OptimizationConfig
-
-DEFAULT_PARETO_METRICS = ("accuracy", "safety", "robustness")
-DEFAULT_STAGNATION_WINDOW = 5
-DEFAULT_MAX_LINEAGE_DEPTH = 10
-DEFAULT_LLM_BATCH_SIZE = 5
+from data_structures import PromptNode, OptimizationSource
+from config import DEFAULT_PARETO_METRICS, DEFAULT_STAGNATION_WINDOW, MIN_IMPROVEMENT, GLOBAL_HISTORY_WINDOW, TOP_BEST_NODES
 
 class HistoryManager:
-    def __init__(self, config: OptimizationConfig):
-        self.config = config                                                          # Конфигурация оптимизации
+    def __init__(self):
         self.nodes: Dict[str, PromptNode] = {}                                        # Основное хранилище: id -> PromptNode
         self.nodes_by_generation: Dict[int, List[str]] = defaultdict(list)            # Индекс по поколениям
         self.nodes_by_source: Dict[OptimizationSource, List[str]] = defaultdict(list) # Индекс по источникам
@@ -111,7 +106,7 @@ class HistoryManager:
         
         return candidates[:top_k]
     
-    def get_pareto_front(self, metrics: List[str] = DEFAULT_PARETO_METRICS) -> List[PromptNode]:
+    def get_pareto_front(self) -> List[PromptNode]:
         """Определение Pareto-front"""
         nodes = self.get_evaluated_nodes()
         if len(nodes) <= 1:
@@ -121,7 +116,7 @@ class HistoryManager:
         values = []
         for node in nodes:
             node_values = []
-            for metric in metrics:
+            for metric in DEFAULT_PARETO_METRICS:
                 if hasattr(node.metrics, metric):
                     node_values.append(getattr(node.metrics, metric))
                 else:
@@ -154,7 +149,7 @@ class HistoryManager:
         
         return front
     
-    def analyze_successful_operations(self, min_improvement: float = 0.05) -> Dict[str, int]:
+    def analyze_successful_operations(self) -> Dict[str, int]:
         """Анализ типов операций, которые привели к улучшению"""
         operation_counts = defaultdict(int)
         
@@ -169,23 +164,23 @@ class HistoryManager:
             # Проверяем, есть ли улучшение
             improvement = (node.metrics.composite_score() - parent.metrics.composite_score())
             
-            if improvement >= min_improvement:
+            if improvement >= MIN_IMPROVEMENT:
                 # Считаем операции, приведшие к улучшению
                 for op in node.operations:
                     operation_counts[op.operation_type.value] += 1
         
         return dict(operation_counts)
     
-    def get_stagnation_info(self, window: int = DEFAULT_STAGNATION_WINDOW) -> Dict[str, any]:
+    def get_stagnation_info(self) -> Dict[str, any]:
         """Определение застоя в оптимизации"""
         current_gen = max(self.nodes_by_generation.keys()) if self.nodes_by_generation else 0
         
-        if current_gen < window:
+        if current_gen < DEFAULT_STAGNATION_WINDOW:
             return {"is_stagnant": False, "best_score": 0.0}
         
         # Берем лучшие узлы из последних window поколений
         recent_best_scores = []
-        for gen in range(max(0, current_gen - window + 1), current_gen + 1):
+        for gen in range(max(0, current_gen - DEFAULT_STAGNATION_WINDOW + 1), current_gen + 1):
             gen_nodes = self.get_nodes_by_generation(gen)
             evaluated = [n for n in gen_nodes if n.is_evaluated]
             if evaluated:
@@ -200,7 +195,7 @@ class HistoryManager:
         min_score = min(recent_best_scores)
         improvement = max_score - min_score
         
-        is_stagnant = improvement < self.config.min_improvement
+        is_stagnant = improvement < MIN_IMPROVEMENT
         
         return {
             "is_stagnant": is_stagnant,
@@ -209,10 +204,10 @@ class HistoryManager:
             "recent_scores": recent_best_scores
         }
     
-    def get_optimization_summary(self, recent_window: int = 20) -> Dict[str, any]:
+    def get_optimization_summary(self) -> Dict[str, any]:
         """Сводка оптимизации для глобального оптимизатора"""
         # Получаем лучшие узлы
-        best_nodes = self.get_best_nodes(top_k=5)
+        best_nodes = self.get_best_nodes(top_k=TOP_BEST_NODES)
         front = self.get_pareto_front()
         
         # Анализ успешных операций
@@ -221,7 +216,7 @@ class HistoryManager:
         # Последние узлы
         all_nodes = list(self.nodes.values())
         all_nodes.sort(key=lambda n: n.timestamp, reverse=True)
-        recent_nodes = all_nodes[:recent_window]
+        recent_nodes = all_nodes[:GLOBAL_HISTORY_WINDOW]
         
         # Статистика по источникам
         source_stats = {
@@ -261,7 +256,6 @@ class HistoryManager:
     def save(self, filepath: str):
         """Сохранение всей истории в файл"""
         data = {
-            "config": self.config.to_dict(),
             "nodes": {node_id: node.to_dict() for node_id, node in self.nodes.items()},
             "root_ids": self.root_ids,
             "total_evaluations": self.total_evaluations,

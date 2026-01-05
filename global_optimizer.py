@@ -1,42 +1,23 @@
-from typing import List, Dict, Optional, Tuple, Callable
+from typing import List, Dict, Tuple, Callable
 import numpy as np
 from collections import Counter
 import time
 import statistics
 from prompts.templates import Templates
-from llm.llm_client import create_llm
-from data_structures import Example, PromptNode, OptimizationConfig, OptimizationSource, OperationType, EditOperation
+from llm.llm_client import BaseLLM
+from data_structures import Example, PromptNode, OptimizationSource, OperationType
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 from llm.llm_response_parser import StrategyParser
-
-TOP_BEST_NODES: int = 5
-MAX_DISTANCE_PAIRS: int = 10
-COMMON_WORDS_TOP_K: int = 20
-COMMON_WORD_MIN_FREQ: int = 3
-FAILED_PERCENTILE: int = 20
-FAILED_OP_MIN_COUNT: int = 3
-MIN_OPERATION_USAGE: int = 2
-MIN_GLOBAL_SOURCE_USAGE: int = 3
-COMMON_SEQUENCE_MIN_LENGTH: int = 2
-COMMON_SEQUENCE_MAX_LENGTH: int = 3
-TOP_COMMON_SEQUENCES: int = 10
-
-STAGNATION_SIMILARITY_THRESHOLD: float = 0.7
-DIVERSITY_DISTANCE_THRESHOLD: float = 0.3
-LOW_DIVERSITY_THRESHOLD: float = 0.2
-MAX_DIVERSITY_SAMPLES: int = 5
-MIN_NODES_FOR_DIVERSITY: int = 3
-RECENT_GENERATIONS_WINDOW: int = 4
+from config import TOP_BEST_NODES, MAX_DISTANCE_PAIRS, COMMON_WORDS_TOP_K, COMMON_WORD_MIN_FREQ, FAILED_PERCENTILE, FAILED_OP_MIN_COUNT, MIN_OPERATION_USAGE, MIN_GLOBAL_SOURCE_USAGE, STAGNATION_SIMILARITY_THRESHOLD, DIVERSITY_DISTANCE_THRESHOLD, LOW_DIVERSITY_THRESHOLD, MAX_DIVERSITY_SAMPLES, MIN_NODES_FOR_DIVERSITY, GLOBAL_TRIGGER_INTERVAL, COMMON_SUBSEQ_LENGTHS, TOP_COMMON_SUBSEQ, RECENT_GENERATIONS_FOR_DIVERSITY
     
 class GlobalOptimizer:
-    def __init__(self, config: OptimizationConfig, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, api_config: Optional[Dict[str, str]] = None):
-        self.config = config
+    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
         self.history = history_manager
         self.scorer = scorer
         self.editor = prompt_editor
-        self.llm = create_llm(self.config, api_config)
+        self.llm = llm
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0
@@ -99,7 +80,7 @@ class GlobalOptimizer:
         best_nodes = self.history.get_best_nodes(TOP_BEST_NODES)        
         
         return {
-            "summary": self.history.get_optimization_summary(recent_window=self.config.global_history_window),
+            "summary": self.history.get_optimization_summary(),
             "best_nodes": best_nodes,
             "best_node": best_nodes[0] if best_nodes else None,
             "patterns": self._identify_patterns(best_nodes),
@@ -126,10 +107,10 @@ class GlobalOptimizer:
         counts = Counter(
             tuple(seq[i:i+n])
             for seq in sequences
-            for n in (2, 3)
+            for n in COMMON_SUBSEQ_LENGTHS
             for i in range(len(seq) - n + 1)
         )
-        return [s for s, c in counts.items() if c >= 2 and len(s) >= min_length][:10]    # Топ-10 общих подпоследовательностей  
+        return [s for s, c in counts.items() if c >= 2 and len(s) >= min_length][:TOP_COMMON_SUBSEQ]    # Топ общих подпоследовательностей  
     
     def _analyze_stagnation(self, best_nodes: List[PromptNode]) -> Dict:
         """Анализ застоя в оптимизации"""
@@ -147,7 +128,7 @@ class GlobalOptimizer:
             
     def _analyze_diversity(self) -> Dict:
         """Анализ разнообразия в популяции"""
-        gens = sorted(self.history.nodes_by_generation.keys())[-4:]
+        gens = sorted(self.history.nodes_by_generation.keys())[-RECENT_GENERATIONS_FOR_DIVERSITY:]
         nodes = [n for g in gens for n in self.history.get_nodes_by_generation(g)]
 
         if len(nodes) < 2:
@@ -163,7 +144,7 @@ class GlobalOptimizer:
     
     def _extract_best_elements(self) -> Dict:
         """Извлечение лучших элементов из успешных промптов"""
-        best_nodes = self.history.get_best_nodes(top_k=BEST_NODES_TOP_K)
+        best_nodes = self.history.get_best_nodes(top_k=TOP_BEST_NODES)
         
         if not best_nodes:
             return {"prompts": [], "common_phrases": []}
@@ -310,7 +291,7 @@ class GlobalOptimizer:
     def should_trigger_global_step(self, current_generation: int) -> bool:
         """Определение, нужно ли запускать глобальный шаг"""
         # Триггер 1: Регулярный интервал
-        if current_generation % self.config.global_trigger_interval == 0:
+        if current_generation % GLOBAL_TRIGGER_INTERVAL == 0:
             return True
         
         # Триггер 2: Обнаружен застой

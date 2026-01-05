@@ -1,27 +1,26 @@
 from typing import List, Dict, Optional
 import time
-from datetime import datetime
 import json
 import os
-from data_structures import Example, PromptNode, OptimizationConfig, OptimizationSource
+from data_structures import Example, PromptNode, OptimizationSource
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
 from local_optimizer import LocalOptimizer
 from global_optimizer import GlobalOptimizer
+from llm.llm_client import create_llm
+from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
-    def __init__(self, config: OptimizationConfig, api_config: Optional[Dict[str, str]] = None):
-        self.config = config
-        self.api_config = api_config or {}
-        
-        self.history = HistoryManager(config)
-        self.scorer = PromptScorer(config=config, api_config=api_config)
-        self.gradient_gen = TextGradientGenerator(config=config, api_config=api_config)
-        self.editor = PromptEditor(config=config, api_config=api_config)
-        self.local_optimizer = LocalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor)
-        self.global_optimizer = GlobalOptimizer(config=config, history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, api_config=api_config)
+    def __init__(self):
+        self.llm = create_llm()
+        self.history = HistoryManager()
+        self.scorer = PromptScorer(llm=self.llm)
+        self.gradient_gen = TextGradientGenerator(llm=self.llm)
+        self.editor = PromptEditor(llm=self.llm)
+        self.local_optimizer = LocalOptimizer(history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor)
+        self.global_optimizer = GlobalOptimizer(history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, llm=self.llm)
         
         # Метаданные оптимизации
         self.start_time = None
@@ -31,22 +30,6 @@ class HierarchicalOptimizer:
     
     def optimize(self, initial_prompt: str, train_examples: List[Example], validation_examples: List[Example], test_examples: Optional[List[Example]] = None, save_dir: Optional[str] = None) -> PromptNode:
         self.start_time = time.time()
-        
-        print("="*80)
-        print("HIERARCHICAL PROMPT OPTIMIZATION")
-        print("="*80)
-        print(f"Configuration:")
-        print(f"  Max generations: {self.config.max_generations}")
-        print(f"  Local iterations per generation: {self.config.local_iterations_per_generation}")
-        print(f"  Global trigger interval: {self.config.global_trigger_interval}")
-        print(f"  Population size: {self.config.population_size}")
-        print(f"  Patience: {self.config.patience}")
-        print(f"\nDataset sizes:")
-        print(f"  Train: {len(train_examples)}")
-        print(f"  Validation: {len(validation_examples)}")
-        if test_examples:
-            print(f"  Test: {len(test_examples)}")
-        print("="*80 + "\n")
         
         # Создаем начальный узел
         initial_node = PromptNode(
@@ -84,9 +67,9 @@ class HierarchicalOptimizer:
         generation = 0
         
         # Основной цикл оптимизации
-        for generation in range(1, self.config.max_generations + 1):
+        for generation in range(1, MAX_GENERATIONS + 1):
             print("\n" + "="*80)
-            print(f"GENERATION {generation}/{self.config.max_generations}")
+            print(f"GENERATION {generation}/{MAX_GENERATIONS}")
             print("="*80 + "\n")
             
             generation_start_time = time.time()
@@ -158,7 +141,7 @@ class HierarchicalOptimizer:
             # Выбираем лучших для следующего поколения
             population = self._select_population(
                 new_candidates,
-                population_size=self.config.population_size
+                population_size=POPULATION_SIZE
             )
             
             # Обновляем лучший узел
@@ -171,7 +154,7 @@ class HierarchicalOptimizer:
             # Проверяем улучшение
             improvement = generation_best_score - best_score
             
-            if improvement + 1e-8 >= self.config.min_improvement:
+            if improvement + 1e-8 >= MIN_IMPROVEMENT:
                 print(f"  ✓ Improvement: +{improvement:.3f}")
                 self.best_node = generation_best
                 best_score = generation_best_score
@@ -194,13 +177,8 @@ class HierarchicalOptimizer:
             
             print(f"\n  Generation time: {generation_time:.2f}s")
             
-            # Промежуточное сохранение
-            if save_dir and generation % 5 == 0:
-                self._save_checkpoint(save_dir, generation)
-            
             # EARLY STOPPING
-            
-            if generations_without_improvement >= self.config.patience:
+            if generations_without_improvement >= PATIENCE:
                 print(f"\n{'='*80}")
                 print(f"EARLY STOPPING")
                 print(f"No improvement for {generations_without_improvement} generations")
@@ -325,8 +303,7 @@ class HierarchicalOptimizer:
                 "start_time": self.start_time,
                 "end_time": self.end_time,
                 "total_time_seconds": self.end_time - self.start_time if self.end_time else None,
-                "generations": len(self.optimization_log),
-                "config": self.config.to_dict()
+                "generations": len(self.optimization_log)
             },
             
             # Результаты
@@ -359,7 +336,7 @@ class HierarchicalOptimizer:
             ],
             
             # Успешные стратегии
-            "best_global_strategies": self.global_optimizer.get_best_strategies(top_k=5)
+            "best_global_strategies": self.global_optimizer.get_best_strategies(top_k=TOP_BEST_NODES)
         }
         
         return report
@@ -393,15 +370,6 @@ class HierarchicalOptimizer:
         viz += "\n" + "="*80 + "\n"
         
         return viz
-    
-    def _save_checkpoint(self, save_dir: str, generation: int):
-        """Сохранение checkpoint'а"""
-        os.makedirs(save_dir, exist_ok=True)
-        
-        checkpoint_path = os.path.join(save_dir, f"checkpoint_gen_{generation}.json")
-        self.history.save(checkpoint_path)
-        
-        print(f"  Checkpoint saved: {checkpoint_path}")
     
     def _save_final_results(self, save_dir: str, test_examples: Optional[List[Example]] = None):
         """Сохранение финальных результатов"""
