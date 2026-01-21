@@ -1,55 +1,81 @@
 from typing import List, Dict, Optional
-from copy import deepcopy
 from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
-from config import METRIC_WEIGHTS
+from functools import lru_cache
+import random
+from config import METRIC_WEIGHTS, MAX_EXAMPLES_PER_NODE
 
 class PromptScorer:
     def __init__(self, llm: BaseLLM):
         self.llm = llm
+        self.max_examples_per_node = MAX_EXAMPLES_PER_NODE
+        self.seed = 42
         
         # Регистрируем метрики
         self.metrics: Dict[str, MetricEvaluator] = {}
         for metric_cls in [AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric]:
             metric = metric_cls()
-            self.metrics[metric.name] = metric
+            if METRIC_WEIGHTS.get(metric.name, 0.0) > 0:
+                self.metrics[metric.name] = metric
 
         self._last_eval_examples: Optional[List[Example]] = None
 
+    @lru_cache(maxsize=10_000)
+    def _cached_llm_call(self, prompt: str) -> str:
+        return self.llm.invoke(prompt=prompt)
+        
+    def _sample_examples(self, examples: List[Example]) -> List[Example]:
+        if len(examples) <= self.max_examples_per_node:
+            return examples
+
+        rnd = random.Random(self.seed)
+        return rnd.sample(examples, self.max_examples_per_node)
+    
+    def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
+        inputs = "\n\n".join(
+            f"Example {i + 1}:\n{ex.input_text}"
+            for i, ex in enumerate(examples)
+        )
+
+        full_prompt = f"""{prompt}
+
+            Solve the following examples.
+            Return EXACTLY one answer per line, in the same order.
+
+            {inputs}
+        """
+
+        raw_output = self._cached_llm_call(full_prompt)
+        outputs = [line.strip() for line in raw_output.splitlines() if line.strip()]
+
+        for ex, out in zip(examples, outputs):
+            ex.actual_output = out
+
+        return examples
+    
     def execute_prompt(self, prompt: str, input_text: str) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
         return self.llm.invoke(prompt=full_prompt)
 
-    def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
-        """Применяет промпт ко всему списку примеров. Для каждого Example сохраняет actual_output"""
-        results = []
-
-        for ex in examples:
-            ex.actual_output = self.execute_prompt(prompt, ex.input_text)
-            results.append(ex)
-
-        return results
-
     def evaluate_prompt(self, prompt: str, examples: List[Example], execute: bool = True) -> Metrics:
-        eval_examples = examples 
+        eval_examples = self._sample_examples(examples)
         
-        if execute: 
-            eval_examples = deepcopy(examples) 
-            eval_examples = self.execute_prompt_batch(prompt, eval_examples) 
+        if execute:
+            eval_examples = [
+                Example(input_text=ex.input_text, expected_output=ex.expected_output)
+                for ex in eval_examples
+            ]
+
+            eval_examples = self.execute_prompt_batch(prompt, eval_examples)
             self._last_eval_examples = eval_examples
 
-        # Создаём объект Metrics и задаём веса из конфига
         metrics = Metrics()
         metrics.weights = METRIC_WEIGHTS.copy()
 
         for name, metric in self.metrics.items():
-            weight = METRIC_WEIGHTS.get(name, 0.0)
-            if weight <= 0:
-                metrics.metrics[name] = 0.0
-                continue
             score = metric.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
             metrics.metrics[name] = float(score)
 
