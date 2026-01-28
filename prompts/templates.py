@@ -197,6 +197,5 @@ class Templates:
             error_analysis=gradient.error_analysis,
             suggested_direction=gradient.suggested_direction,
             specific_suggestions_block=suggestions,
-            failure_examples_block=failures,
             num_variants=num_variants
         )

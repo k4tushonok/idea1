@@ -36,7 +36,25 @@ class Example:
         if self.actual_output is None:
             return False
         return self.expected_output.strip().lower() == self.actual_output.strip().lower()
-    
+
+    def is_correct_by_llm(self, llm)-> bool:
+        """Проверка корректности ответа"""
+        if self.actual_output is None:
+            return False
+        prompt = (f"There are two answers on the same question. "
+                  f"'Expected output' is a true answer used as label during dataset training. "
+                  f"'Actual answer' is an answer of LLM model. "
+                  f"You need to estimate semantic similarity of these answers. "
+                  f"Return 'Yes' if these answers are semantically the same (for example: '1984' and 'It was in 1984'), "
+                  f"and return 'No' otherwise.\n"
+                  f"# Output format: return 'Yes' or 'No'\n"
+                  f"# Answers to compare:\n"
+                  f"- Actual answer: {self.actual_output}\n"
+                  f"- Expected output: {self.expected_output}\n")
+        response = llm.invoke(prompt)
+
+        return response.strip().lower() == 'yes'
+
     def to_dict(self) -> Dict:
         return asdict(self)
     

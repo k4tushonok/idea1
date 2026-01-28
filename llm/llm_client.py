@@ -4,6 +4,7 @@ from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
 from config import PROVIDER, API_KEY, MODEL, TEMPERATURE, MAX_TOKENS
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 class BaseLLM(ABC):
     def __init__(self):
@@ -16,6 +17,41 @@ class BaseLLM(ABC):
     @abstractmethod
     def _generate(self, prompt: str) -> str:
         pass
+
+
+class LocalQwenModel(BaseLLM):
+    def __init__(self):
+        super().__init__()
+        self.model_name = MODEL
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype="auto",
+            device_map="cuda"
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+
+    def _generate(self, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
+
+        generated_ids = self.model.generate(
+            **model_inputs,
+            max_new_tokens=512
+        )
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        ]
+
+        response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        return response
     
 class OpenAILLM(BaseLLM):
     def __init__(self):
@@ -57,5 +93,7 @@ def create_llm() -> BaseLLM:
         return OpenAILLM()
     elif provider == "gemini":
         return GeminiLLM()
+    elif provider == "local_qwen":
+        return LocalQwenModel()
     else:
         raise ValueError(f"Unsupported provider: {provider}")

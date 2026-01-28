@@ -12,6 +12,8 @@ FAILURE EXAMPLES (where the prompt produced incorrect outputs):
 
 {failure_examples_block}
 
+SUCCESS EXAMPLES (where the prompt produced correct outputs):
+
 {success_examples_section}
 
 OPTIMIZATION HISTORY CONTEXT:

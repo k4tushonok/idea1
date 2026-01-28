@@ -10,7 +10,24 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 from llm.llm_response_parser import StrategyParser
-from config import TOP_BEST_NODES, MAX_DISTANCE_PAIRS, COMMON_WORDS_TOP_K, COMMON_WORD_MIN_FREQ, FAILED_PERCENTILE, FAILED_OP_MIN_COUNT, MIN_OPERATION_USAGE, MIN_GLOBAL_SOURCE_USAGE, STAGNATION_SIMILARITY_THRESHOLD, DIVERSITY_DISTANCE_THRESHOLD, LOW_DIVERSITY_THRESHOLD, MAX_DIVERSITY_SAMPLES, MIN_NODES_FOR_DIVERSITY, GLOBAL_TRIGGER_INTERVAL, COMMON_SUBSEQ_LENGTHS, TOP_COMMON_SUBSEQ, RECENT_GENERATIONS_FOR_DIVERSITY
+from config import (TOP_BEST_NODES,
+                    MAX_DISTANCE_PAIRS,
+                    COMMON_WORDS_TOP_K,
+                    COMMON_WORD_MIN_FREQ,
+                    FAILED_PERCENTILE,
+                    FAILED_OP_MIN_COUNT,
+                    MIN_OPERATION_USAGE,
+                    MIN_GLOBAL_SOURCE_USAGE,
+                    STAGNATION_SIMILARITY_THRESHOLD,
+                    DIVERSITY_DISTANCE_THRESHOLD,
+                    LOW_DIVERSITY_THRESHOLD,
+                    MAX_DIVERSITY_SAMPLES,
+                    MIN_NODES_FOR_DIVERSITY,
+                    GLOBAL_TRIGGER_INTERVAL,
+                    COMMON_SUBSEQ_LENGTHS,
+                    TOP_COMMON_SUBSEQ,
+                    RECENT_GENERATIONS_FOR_DIVERSITY,
+                    GLOBAL_OPT_AVG_PATH_LENGTH,)
     
 class GlobalOptimizer:
     def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
@@ -64,7 +81,7 @@ class GlobalOptimizer:
         
         # Шаг 4: Оценка кандидатов
         print("\nStep 4: Evaluating global candidates...")
-        evaluated_candidates = self._evaluate_global_candidates(candidates, validation_examples)
+        evaluated_candidates = self._evaluate_global_candidates(candidates, train_examples)
         
         # Шаг 5: Анализ результатов
         print("\nStep 5: Analyzing results...")
@@ -86,9 +103,9 @@ class GlobalOptimizer:
             "patterns": self._identify_patterns(best_nodes),
             "stagnation": self._analyze_stagnation(best_nodes),
             "diversity": self._analyze_diversity(),
-            "best_elements": self._extract_best_elements(best_nodes),
+            "best_elements": self._extract_best_elements(),
             "failed_directions": self._identify_failed_directions(),
-            "unexplored_space": self._identify_unexplored_space(),
+            "unexplored_space": self._identify_unexplored_space()
         }
     
     def _identify_patterns(self, best_nodes: List[PromptNode]) -> Dict:
@@ -100,9 +117,10 @@ class GlobalOptimizer:
         return {
             "successful_operations": self.history.analyze_successful_operations(),
             "common_sequences": self._find_common_subsequences(trajectories),
+            "avg_path_length": GLOBAL_OPT_AVG_PATH_LENGTH
         }
         
-    def _find_common_subsequences(self, sequences: List[List[str]], min_length: int) -> List[Tuple]:
+    def _find_common_subsequences(self, sequences: List[List[str]], min_length: int = 2) -> List[Tuple]:
         """Поиск общих подпоследовательностей в траекториях оптимизации"""
         counts = Counter(
             tuple(seq[i:i+n])
@@ -124,6 +142,7 @@ class GlobalOptimizer:
             "is_stagnant": avg_similarity > STAGNATION_SIMILARITY_THRESHOLD,
             "avg_similarity": avg_similarity,
             "needs_exploration": avg_similarity > STAGNATION_SIMILARITY_THRESHOLD,
+            "best_score": best_nodes[0].metrics.composite_score() if best_nodes else 0.0
         }
             
     def _analyze_diversity(self) -> Dict:

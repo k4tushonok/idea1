@@ -19,7 +19,7 @@ class HierarchicalOptimizer:
         self.scorer = PromptScorer(llm=self.llm)
         self.gradient_gen = TextGradientGenerator(llm=self.llm)
         self.editor = PromptEditor(llm=self.llm)
-        self.local_optimizer = LocalOptimizer(history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor)
+        self.local_optimizer = LocalOptimizer(history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor, llm=self.llm)
         self.global_optimizer = GlobalOptimizer(history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, llm=self.llm)
         
         # Метаданные оптимизации
@@ -42,7 +42,7 @@ class HierarchicalOptimizer:
         print("Evaluating initial prompt...")
         initial_node = self.scorer.evaluate_node(
             initial_node,
-            validation_examples,
+            train_examples,
             execute=True
         )
         
@@ -206,10 +206,15 @@ class HierarchicalOptimizer:
             test_metrics = self.scorer.evaluate_prompt(
                 self.best_node.prompt_text,
                 test_examples,
-                execute=True
+                execute=True,
+                sample=False,
             )
             print(f"  Test score: {test_metrics.composite_score():.3f}")
             print(f"  Test accuracy: {test_metrics.metrics['accuracy']:.3f}")
+            print(f"  Test f1: {test_metrics.metrics['f1']:.3f}")
+            print(f"  Test safety: {test_metrics.metrics['safety']:.3f}")
+            print(f"  Test robustness: {test_metrics.metrics['robustness']:.3f}")
+            print(f"  Test efficiency: {test_metrics.metrics['efficiency']:.3f}")
         
         # Сохранение результатов
         if save_dir:

@@ -5,6 +5,7 @@ from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
 from functools import lru_cache
 import random
+from tqdm import tqdm
 from config import METRIC_WEIGHTS, MAX_EXAMPLES_PER_NODE
 
 class PromptScorer:
@@ -33,25 +34,13 @@ class PromptScorer:
         rnd = random.Random(self.seed)
         return rnd.sample(examples, self.max_examples_per_node)
     
-    def execute_prompt_batch(self, prompt: str, examples: List[Example]) -> List[Example]:
-        inputs = "\n\n".join(
-            f"Example {i + 1}:\n{ex.input_text}"
-            for i, ex in enumerate(examples)
-        )
-
-        full_prompt = f"""{prompt}
-
-            Solve the following examples.
-            Return EXACTLY one answer per line, in the same order.
-
-            {inputs}
-        """
-
-        raw_output = self._cached_llm_call(full_prompt)
-        outputs = [line.strip() for line in raw_output.splitlines() if line.strip()]
-
-        for ex, out in zip(examples, outputs):
-            ex.actual_output = out
+    def execute_prompt_batch(self, prompt: str, examples: List[Example], progress_bar: bool = False) -> List[Example]:
+        if progress_bar:
+            for i, ex in enumerate(tqdm(examples)):
+                ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+        else:
+            for i, ex in enumerate(examples):
+                ex.actual_output = self.execute_prompt(prompt, ex.input_text)
 
         return examples
     
@@ -60,8 +49,14 @@ class PromptScorer:
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
         return self.llm.invoke(prompt=full_prompt)
 
-    def evaluate_prompt(self, prompt: str, examples: List[Example], execute: bool = True) -> Metrics:
-        eval_examples = self._sample_examples(examples)
+    def evaluate_prompt(self, prompt: str,
+                        examples: List[Example],
+                        execute: bool = True,
+                        sample: bool = True) -> Metrics:
+        if sample:
+            eval_examples = self._sample_examples(examples)
+        else:
+            eval_examples = examples
         
         if execute:
             eval_examples = [
@@ -69,7 +64,7 @@ class PromptScorer:
                 for ex in eval_examples
             ]
 
-            eval_examples = self.execute_prompt_batch(prompt, eval_examples)
+            eval_examples = self.execute_prompt_batch(prompt, eval_examples, not sample)
             self._last_eval_examples = eval_examples
 
         metrics = Metrics()
@@ -92,7 +87,7 @@ class PromptScorer:
         # Разделяем успешные и неуспешные примеры
         successes, failures = [], []
         for ex in eval_examples:
-            if ex.actual_output and ex.is_correct():
+            if ex.actual_output and (ex.is_correct() or ex.is_correct_by_llm(self.llm)):
                 successes.append(ex)
             else:
                 failures.append(ex)

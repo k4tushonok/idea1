@@ -1,35 +1,32 @@
 You are an expert prompt engineer. Your task is to improve a prompt based on analysis of its failures.
 
-CURRENT PROMPT:
+## CURRENT PROMPT:
 ```
 {current_prompt}
 ```
 
-ANALYSIS OF PROBLEMS:
+## ANALYSIS OF PROBLEMS:
 {error_analysis}
 
-SUGGESTED DIRECTION FOR IMPROVEMENT:
+## SUGGESTED DIRECTION FOR IMPROVEMENT:
 {suggested_direction}
 
-SPECIFIC SUGGESTIONS:
+## SPECIFIC SUGGESTIONS:
 {specific_suggestions_block}
 
-EXAMPLES OF FAILURES TO ADDRESS:
-{failure_examples_block}
-
-YOUR TASK:
+## YOUR TASK:
 Generate {num_variants} improved versions of the prompt that address the problems identified above.
 
-REQUIREMENTS:
-1. Each variant should be a COMPLETE, FUNCTIONAL prompt (not just modifications)
-2. Apply the suggested improvements while maintaining the core purpose
-3. Make variants somewhat diverse - try different approaches to solving the same problems
-4. Focus on being concrete and specific in instructions
-5. Consider adding examples, constraints, or clarifications where needed
+## REQUIREMENTS:
+1. Variants should be different.
+2. Each variant should be a COMPLETE, FUNCTIONAL prompt (not just modifications)
+3. Apply the suggested improvements while maintaining the core purpose
+4. Make variants somewhat diverse - try different approaches to solving the same problems
+5. Focus on being concrete and specific in instructions
+6. Consider adding examples, constraints, or clarifications where needed
 
-OUTPUT FORMAT:
+## OUTPUT FORMAT:
 For each variant, use this exact format:
-
 VARIANT [number]:
 CHANGES MADE: [Brief description of what you changed and why]
 OPERATION TYPE: [Choose one: add_instruction, modify_instruction, rephrase, add_example, add_constraint, clarify, restructure]

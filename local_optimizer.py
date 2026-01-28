@@ -9,7 +9,7 @@ from prompt_editor import PromptEditor
 from config import LOCAL_ITERATIONS_PER_GENERATION, MIN_IMPROVEMENT, LOCAL_BATCH_SIZE, CLUSTERING_FAILURE_MULTIPLIER, MAX_CONTEXT_OPERATIONS, MIN_EXAMPLES_FOR_CONTRASTIVE, PATIENCE, SIMILARITY_THRESHOLD
 
 class LocalOptimizer:
-    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, gradient_generator: TextGradientGenerator, prompt_editor: PromptEditor):
+    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, gradient_generator: TextGradientGenerator, prompt_editor: PromptEditor, llm):
         self.history = history_manager
         self.scorer = scorer
         self.gradient_gen = gradient_generator
@@ -22,6 +22,7 @@ class LocalOptimizer:
         
         # Кэш для предотвращения повторной оценки
         self._evaluated_prompts: Set[str] = set()
+        self.llm = llm
     
     def optimize(self, starting_node: PromptNode, train_examples: List[Example], validation_examples: List[Example]) -> PromptNode:
         print(f"\n{'='*60}")
@@ -68,7 +69,7 @@ class LocalOptimizer:
             print(f"Generated {len(candidates)} candidate prompts")
             
             # Шаг 4: Оцениваем кандидатов
-            evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
+            evaluated_candidates = self._evaluate_candidates(candidates, train_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
             
             # Шаг 5: Выбираем лучшего кандидата
@@ -85,6 +86,21 @@ class LocalOptimizer:
                     best_score = candidate_score
                     no_improve_iters = 0
                     self.improvements_count += 1
+
+                    if validation_examples:
+                        print(f"\nValidation Set Evaluation:")
+                        test_metrics = self.scorer.evaluate_prompt(
+                            current_best.prompt_text,
+                            validation_examples,
+                            execute=True,
+                            sample=False,
+                        )
+                        print(f"  Validation score: {test_metrics.composite_score():.3f}")
+                        print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
+                        print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
+                        print(f"  Validation robustness: {test_metrics.metrics['robustness']:.3f}")
+                        print(f"  Validation efficiency: {test_metrics.metrics['efficiency']:.3f}")
+                        print(f"  Validation safety: {test_metrics.metrics['safety']:.3f}")
                 else:
                     print(f"✗ No significant improvement")
                     no_improve_iters += 1
@@ -133,7 +149,7 @@ class LocalOptimizer:
         executed_examples = self.scorer.execute_prompt_batch(node.prompt_text, examples)
         
         # Фильтруем провалы
-        failures = [ex for ex in executed_examples if not ex.is_correct()]
+        failures = [ex for ex in executed_examples if not ex.is_correct_by_llm(self.llm)]
         return failures
     
     def _generate_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example]) -> List[TextGradient]:
@@ -147,7 +163,7 @@ class LocalOptimizer:
                 context["successful_operations"] = list(successful_ops.keys())[:MAX_CONTEXT_OPERATIONS]
         
         # Опция 1: Кластеризация провалов и генерация градиентов для каждого кластера
-        if len(failure_examples) > LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
+        if len(failure_examples) > 0: # LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
             gradients = self.gradient_gen.generate_clustered_gradients(node, failure_examples, success_examples, context)
         # Опция 2: Батчевая генерация градиентов
         else:

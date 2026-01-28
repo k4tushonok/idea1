@@ -35,7 +35,7 @@ YOUR TASK:
 Generate 3-5 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
 
 OUTPUT FORMAT:
-For each strategy, use this format:
+For each strategy, use exactly this format:
 
 STRATEGY [number]:
 TYPE: [Choose from: COMBINE, RESTRUCTURE, DIVERSIFY, SPECIALIZE, SIMPLIFY, EXPAND]

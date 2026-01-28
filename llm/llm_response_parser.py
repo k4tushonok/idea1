@@ -127,7 +127,9 @@ class VariantParser:
     @staticmethod
     def parse_single_variant(block: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> Optional[PromptNode]:
         new_prompt = VariantParser.extract_prompt(block)
-        if not new_prompt or len(new_prompt) < MIN_PROMPT_LENGTH:
+        if not new_prompt:
+            new_prompt = block
+        if len(new_prompt) < MIN_PROMPT_LENGTH:
             return None
 
         operation = EditOperation(
@@ -157,7 +159,7 @@ class GradientParser:
 
         specific_suggestions = SectionParser.extract_numbered_list(sections.get("## SPECIFIC SUGGESTIONS", ""))
 
-        priority = min(max(SectionParser.extract_priority(sections.get("## PRIORITY", "")), 0.0), 1.0)  
+        priority = min(max(SectionParser.extract_priority(sections.get("## PRIORITY", "")), 0.0), 1.0)
 
         gradient = TextGradient(
             failure_examples=failure_examples,
@@ -233,22 +235,26 @@ class ClusterParser:
 class StrategyParser:
     @staticmethod
     def parse_strategies(response_text: str) -> List[Dict]:
+        def preprocess_text(text: str) -> str:
+            text = text.replace('*', '').replace('\n', '').replace('#', '').strip()
+            return text
+
         strategies = []
         strategy_blocks = re.split(r'STRATEGY\s+\d+:', response_text)
         
         for block in strategy_blocks[1:]:
             try:
-                type_match = re.search(r'TYPE:\s*(\w+)', block)
+                type_match = re.search(r'TYPE:\s*(.+?)(?=DESCRIPTION:|$)', block, re.DOTALL)
                 desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL)
                 rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL)
                 action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL)
-                
+
                 if type_match and desc_match:
                     strategy = {
-                        "type": type_match.group(1).strip().upper(),
-                        "description": desc_match.group(1).strip(),
-                        "rationale": rationale_match.group(1).strip() if rationale_match else "",
-                        "action": action_match.group(1).strip() if action_match else ""
+                        "type": preprocess_text(type_match.group(1)).upper(),
+                        "description": preprocess_text(desc_match.group(1)),
+                        "rationale": preprocess_text(rationale_match.group(1)) if rationale_match else "",
+                        "action": preprocess_text(action_match.group(1)) if action_match else ""
                     }
                     strategies.append(strategy)
             except Exception as e:
