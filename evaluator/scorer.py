@@ -7,6 +7,8 @@ from functools import lru_cache
 import random
 from tqdm import tqdm
 from config import METRIC_WEIGHTS, MAX_EXAMPLES_PER_NODE
+import json
+from config import BATCH_EVAL_SIZE
 
 class PromptScorer:
     def __init__(self, llm: BaseLLM):
@@ -22,10 +24,12 @@ class PromptScorer:
                 self.metrics[metric.name] = metric
 
         self._last_eval_examples: Optional[List[Example]] = None
-
-    @lru_cache(maxsize=10_000)
-    def _cached_llm_call(self, prompt: str) -> str:
-        return self.llm.invoke(prompt=prompt)
+        
+        try:
+            self.llm.invoke = lru_cache(maxsize=10000)(self.llm.invoke)
+        except Exception:
+            print("Failed to apply LLM invoke caching")
+            pass
         
     def _sample_examples(self, examples: List[Example]) -> List[Example]:
         if len(examples) <= self.max_examples_per_node:
@@ -35,14 +39,71 @@ class PromptScorer:
         return rnd.sample(examples, self.max_examples_per_node)
     
     def execute_prompt_batch(self, prompt: str, examples: List[Example], progress_bar: bool = False) -> List[Example]:
-        if progress_bar:
-            for i, ex in enumerate(tqdm(examples)):
-                ex.actual_output = self.execute_prompt(prompt, ex.input_text)
-        else:
+        if len(examples) <= 1:
             for i, ex in enumerate(examples):
                 ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+            return examples
+
+        def chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
+
+        for batch in chunks(examples, BATCH_EVAL_SIZE):
+            batch_prompt = self._build_batch_prompt(prompt, batch)
+            try:
+                raw = self.llm.invoke(prompt=batch_prompt)
+                parsed = self._parse_batch_response(raw, len(batch))
+                if parsed and len(parsed) == len(batch):
+                    for ex, out in zip(batch, parsed):
+                        ex.actual_output = out
+                    continue
+            except Exception:
+                print("Batch execution failed, falling back to single execution")
+                pass
+
+            if progress_bar:
+                for i, ex in enumerate(tqdm(batch)):
+                    print(f"Falling back to single execution for example {i+1}/{len(batch)}")
+                    ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+            else:
+                for ex in batch:
+                    print("Falling back to single execution for one example")
+                    ex.actual_output = self.execute_prompt(prompt, ex.input_text)
 
         return examples
+
+    def _build_batch_prompt(self, prompt: str, examples: List[Example]) -> str:
+        header = (
+            "For each input below, produce the model OUTPUT for that input when using the given PROMPT. "
+            "Return a JSON array of objects with keys 'index' (int) and 'output' (string).\n\n"
+        )
+        body = [header, "PROMPT:\n", prompt, "\n\n"]
+        for i, ex in enumerate(examples):
+            body.append(f"INPUT {i}:\n{ex.input_text}\n\n")
+        body.append("Return JSON now:")
+        return "".join(body)
+
+    def _parse_batch_response(self, response_text: str, n_expected: int) -> Optional[List[str]]:
+        try:
+            start = response_text.find("[")
+            end = response_text.rfind("]") + 1
+            if start == -1 or end == -1:
+                return None
+            arr_text = response_text[start:end]
+            arr = json.loads(arr_text)
+            outputs = [None] * len(arr)
+            for item in arr:
+                idx = int(item.get("index")) if item.get("index") is not None else None
+                out = item.get("output") if item.get("output") is not None else ""
+                if idx is None:
+                    return None
+                outputs[idx] = out
+            if any(o is None for o in outputs):
+                return None
+            return outputs
+        except Exception:
+            print("Failed to parse batch response")
+            return None
     
     def execute_prompt(self, prompt: str, input_text: str) -> str:
         """Выполнение промпта на одном примере"""

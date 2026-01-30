@@ -9,12 +9,17 @@ from config import LOCAL_CANDIDATES_PER_ITERATION, MAX_PROMPTS_TO_COMBINE
 class PromptEditor:
     def __init__(self, llm: BaseLLM):
         self.llm = llm
+        self._cache: Dict[str, str] = {}
 
     def generate_variants(self, current_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode] = None) -> List[PromptNode]:
         """Генерация вариантов промпта на основе текстового градиента"""
         editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, LOCAL_CANDIDATES_PER_ITERATION)
         try:
-            response_text = self.llm.invoke(prompt=editing_prompt)
+            if editing_prompt in self._cache:
+                response_text = self._cache[editing_prompt]
+            else:
+                response_text = self.llm.invoke(prompt=editing_prompt)
+                self._cache[editing_prompt] = response_text
             variants = VariantParser.parse_variants(response_text, current_prompt, gradient, parent_node)
             return variants
         except Exception as e:
@@ -44,7 +49,12 @@ class PromptEditor:
         prompt = Templates.build_specific_prompt(operation_type, current_prompt, content)
 
         try:
-            new_prompt = MarkdownParser.strip_code_fences(self.llm.invoke(prompt=prompt))
+            if prompt in self._cache:
+                new_prompt = MarkdownParser.strip_code_fences(self._cache[prompt])
+            else:
+                resp = self.llm.invoke(prompt=prompt)
+                self._cache[prompt] = resp
+                new_prompt = MarkdownParser.strip_code_fences(resp)
         except Exception:
             new_prompt = current_prompt
 
@@ -73,7 +83,12 @@ class PromptEditor:
         combining_prompt = Templates.build_combine_prompt(prompts, combination_strategy)
         
         try:
-            combined_prompt = MarkdownParser.strip_code_fences(self.llm.invoke(prompt=combining_prompt))
+            if combining_prompt in self._cache:
+                combined_prompt = MarkdownParser.strip_code_fences(self._cache[combining_prompt])
+            else:
+                resp = self.llm.invoke(prompt=combining_prompt)
+                self._cache[combining_prompt] = resp
+                combined_prompt = MarkdownParser.strip_code_fences(resp)
         except Exception:
             combined_prompt = prompts[0]
 
@@ -121,7 +136,11 @@ class PromptEditor:
         best_node: PromptNode = analysis["best_elements"]["prompts"][0]
         simplify_prompt = Templates.build_simplify_prompt(best_node.prompt_text, strategy['action'])
         try:
-            simplified_text = self.llm.invoke(prompt=simplify_prompt)
+            if simplify_prompt in self._cache:
+                simplified_text = self._cache[simplify_prompt]
+            else:
+                simplified_text = self.llm.invoke(prompt=simplify_prompt)
+                self._cache[simplify_prompt] = simplified_text
             operation = EditOperation(operation_type=OperationType.REPHRASE, description=f"SIMPLIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=simplified_text,
@@ -139,7 +158,11 @@ class PromptEditor:
         """Создание разнообразного промпта"""
         diversify_prompt = Templates.build_diversify_prompt(analysis["best_elements"]["prompts"], strategy['action'])
         try:
-            new_prompt_text = self.llm.invoke(prompt=diversify_prompt)
+            if diversify_prompt in self._cache:
+                new_prompt_text = self._cache[diversify_prompt]
+            else:
+                new_prompt_text = self.llm.invoke(prompt=diversify_prompt)
+                self._cache[diversify_prompt] = new_prompt_text
             operation = EditOperation(operation_type=OperationType.RESTRUCTURE, description=f"DIVERSIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=new_prompt_text,

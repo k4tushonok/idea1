@@ -41,6 +41,15 @@ class Example:
         """Проверка корректности ответа"""
         if self.actual_output is None:
             return False
+        
+        try:
+            if self.expected_output is not None and self.expected_output.strip() and \
+               self.expected_output.strip().lower() == self.actual_output.strip().lower():
+                return True
+        except Exception:
+            print("LLM correctness evaluation failed during direct comparison")
+            pass
+
         prompt = (f"There are two answers on the same question. "
                   f"'Expected output' is a true answer used as label during dataset training. "
                   f"'Actual answer' is an answer of LLM model. "
@@ -51,9 +60,12 @@ class Example:
                   f"# Answers to compare:\n"
                   f"- Actual answer: {self.actual_output}\n"
                   f"- Expected output: {self.expected_output}\n")
-        response = llm.invoke(prompt)
-
-        return response.strip().lower() == 'yes'
+        try:
+            response = llm.invoke(prompt)
+            return response.strip().lower() == 'yes'
+        except Exception:
+            print("LLM correctness evaluation failed")
+            return False
 
     def to_dict(self) -> Dict:
         return asdict(self)

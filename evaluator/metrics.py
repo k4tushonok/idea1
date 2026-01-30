@@ -28,6 +28,14 @@ class LLMJudgeMetric(MetricEvaluator):
             if ex.actual_output is None:
                 continue
 
+            try:
+                if ex.expected_output is not None and ex.expected_output.strip() and \
+                   ex.expected_output.strip().lower() == ex.actual_output.strip().lower():
+                    scores.append(1.0)
+                    continue
+            except Exception:
+                pass
+
             judge_prompt = self._build_judge_prompt(
                 prompt=prompt,
                 input_text=ex.input_text,

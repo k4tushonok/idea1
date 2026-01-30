@@ -35,6 +35,7 @@ class GlobalOptimizer:
         self.scorer = scorer
         self.editor = prompt_editor
         self.llm = llm
+        self._cache: Dict[str, str] = {}
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0
@@ -232,7 +233,12 @@ class GlobalOptimizer:
         """Генерация глобальных стратегий на основе анализа истории"""
         strategy_prompt = Templates.build_strategy_prompt(history_analysis)
         try:
-            response_text = self.llm.invoke(prompt=strategy_prompt)
+            if strategy_prompt in self._cache:
+                response_text = self._cache[strategy_prompt]
+            else:
+                response_text = self.llm.invoke(prompt=strategy_prompt)
+                self._cache[strategy_prompt] = response_text
+
             strategies = StrategyParser.parse_strategies(response_text)
             return strategies
         except Exception as e:
