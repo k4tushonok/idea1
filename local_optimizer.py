@@ -175,7 +175,7 @@ class LocalOptimizer:
                 context["successful_operations"] = list(successful_ops.keys())[:MAX_CONTEXT_OPERATIONS]
         
         # Опция 1: Кластеризация провалов и генерация градиентов для каждого кластера
-        if len(failure_examples) > 0: # LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
+        if len(failure_examples) > LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
             gradients = self.gradient_gen.generate_clustered_gradients(node, failure_examples, success_examples, context)
         # Опция 2: Батчевая генерация градиентов
         else:

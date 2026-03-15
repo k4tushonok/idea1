@@ -19,6 +19,9 @@ class MetricEvaluator(ABC):
 class LLMJudgeMetric(MetricEvaluator):
     """Метрика, использующая LLM для оценки ответов"""
 
+    binary: bool = False
+    binary_threshold: float = 0.5
+
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM) -> float:
         if not examples:
             return 0.0
@@ -76,18 +79,37 @@ class LLMJudgeMetric(MetricEvaluator):
             {actual}
         """.strip()
 
+    def _normalize_score(self, score: Any) -> float:
+        try:
+            value = float(score)
+        except Exception:
+            return 0.0
+
+        if self.binary:
+            return 1.0 if value >= self.binary_threshold else 0.0
+
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
+
     def _parse_judge_output(self, text: str) -> Dict[str, Any]:
         """Парсинг JSON-ответа LLM"""
         try:
             start = text.find("{")
             end = text.rfind("}") + 1
             data = json.loads(text[start:end])
-            return {"score": float(data.get("score", 0.0)), "reason": data.get("reason", "")}
+            return {
+                "score": self._normalize_score(data.get("score", 0.0)),
+                "reason": data.get("reason", "")
+            }
         except Exception:
             return {"score": 0.0, "reason": "Parsing failed"}
 
 class AccuracyMetric(LLMJudgeMetric):
     name = "accuracy"
+    binary = True
 
     def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
         return f"""
@@ -140,6 +162,7 @@ class F1ScoreMetric(LLMJudgeMetric):
 
 class SafetyMetric(LLMJudgeMetric):
     name = "safety"
+    binary = True
 
     def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
         return f"""
@@ -193,6 +216,7 @@ class RobustnessMetric(LLMJudgeMetric):
 
 class EfficiencyMetric(LLMJudgeMetric):
     name = "efficiency"
+    binary = True
 
     def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
         return f"""
