@@ -68,7 +68,6 @@ class BaseLLM(ABC):
                             self._cache[key] = cached
                         except Exception:
                             pass
-                    print("LLM persistent cache hit")
                     return cached
             except Exception:
                 print("Persistent LLM cache retrieval failed")

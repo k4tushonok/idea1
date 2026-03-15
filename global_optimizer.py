@@ -179,11 +179,9 @@ class GlobalOptimizer:
         word_freq = Counter(all_words)
         common_words = [word for word, count in word_freq.most_common(COMMON_WORDS_TOP_K) if count >= COMMON_WORD_MIN_FREQ]
         
-        # Извлекаем предложения из лучших промптов
-        best_prompts = [node.prompt_text for node in best_nodes]
-        
+        # Возвращаем сами объекты PromptNode, а не только текст
         return {
-            "prompts": best_prompts,
+            "prompts": best_nodes,
             "common_phrases": common_words,
             "top_scores": [node.metrics.composite_score() for node in best_nodes]
         }

@@ -113,27 +113,42 @@ class PromptEditor:
     
     def apply_specialize_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Специализация промпта"""
-        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_node = best_nodes[0]
         return self.apply_editor_op(best_node, OperationType.ADD_CONSTRAINT, strategy["action"], generation, strategy)
     
     def apply_expand_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Расширение промпта"""
-        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_node = best_nodes[0]
         return self.apply_editor_op(best_node, OperationType.ADD_INSTRUCTION, strategy["action"], generation, strategy)
 
     def apply_restructure_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Реструктуризация промпта"""
-        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_node = best_nodes[0]
         return self.apply_editor_op(best_node, OperationType.RESTRUCTURE, strategy["action"], generation, strategy)
 
     def apply_generic_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Общий подход для неизвестных типов стратегий"""
-        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_node = best_nodes[0]
         return self.apply_editor_op(best_node, OperationType.MODIFY_INSTRUCTION, strategy["action"], generation, strategy)
     
     def apply_simplify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Упрощение промпта"""
-        best_node: PromptNode = analysis["best_elements"]["prompts"][0]
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_node = best_nodes[0]
         simplify_prompt = Templates.build_simplify_prompt(best_node.prompt_text, strategy['action'])
         try:
             if simplify_prompt in self._cache:
@@ -156,7 +171,11 @@ class PromptEditor:
         
     def apply_diversify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Создание разнообразного промпта"""
-        diversify_prompt = Templates.build_diversify_prompt(analysis["best_elements"]["prompts"], strategy['action'])
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        best_prompts_texts = [node.prompt_text if isinstance(node, PromptNode) else str(node) for node in best_nodes]
+        diversify_prompt = Templates.build_diversify_prompt(best_prompts_texts, strategy['action'])
         try:
             if diversify_prompt in self._cache:
                 new_prompt_text = self._cache[diversify_prompt]
@@ -178,7 +197,12 @@ class PromptEditor:
         
     def apply_combine_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
         """Комбинирование лучших промптов"""
-        combined_node = self.combine_prompts(analysis["best_elements"]["prompts"][:MAX_PROMPTS_TO_COMBINE], combination_strategy="best_elements")
+        best_nodes = analysis["best_elements"]["prompts"]
+        if not best_nodes or len(best_nodes) == 0:
+            return None
+        # Извлекаем текст из PromptNode объектов
+        best_prompts_texts = [node.prompt_text if isinstance(node, PromptNode) else str(node) for node in best_nodes]
+        combined_node = self.combine_prompts(best_prompts_texts[:MAX_PROMPTS_TO_COMBINE], combination_strategy="best_elements")
         combined_node.generation = generation
         combined_node.source = OptimizationSource.GLOBAL
         combined_node.metadata["global_strategy"] = strategy

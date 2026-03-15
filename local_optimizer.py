@@ -56,6 +56,18 @@ class LocalOptimizer:
             failure_examples = self._get_failure_examples(current_best, train_examples)
             if not failure_examples:
                 print("No failures found - prompt is perfect on training set!")
+                # Все еще выполняем валидацию на validation_examples
+                if validation_examples:
+                    print(f"\nValidation Set Evaluation:")
+                    test_metrics = self.scorer.evaluate_prompt(
+                        current_best.prompt_text,
+                        validation_examples,
+                        execute=True,
+                        sample=False,
+                    )
+                    print(f"  Validation score: {test_metrics.composite_score():.3f}")
+                    print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
+                    print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
                 break
             success_examples = current_best.evaluation_examples.get("success", [])
             print(f"Failures: {len(failure_examples)}, Successes: {len(success_examples)}")

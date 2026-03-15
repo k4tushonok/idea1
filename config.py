@@ -1,16 +1,16 @@
 from typing import Dict
 
-LOCAL_ITERATIONS_PER_GENERATION: int = 3 # Количество локальных итераций 
-LOCAL_CANDIDATES_PER_ITERATION: int = 5  # Сколько градиентов генерируем за одну итерацию
+LOCAL_ITERATIONS_PER_GENERATION: int = 1 # Количество локальных итераций 
+LOCAL_CANDIDATES_PER_ITERATION: int = 3  # Сколько градиентов генерируем за одну итерацию
 LOCAL_BATCH_SIZE: int = 30               # Максимальное число failure-примеров в одном батче
 LOCAL_MAX_EXAMPLES: int = 20             # Максимальное число примеров, передаваемых в один LLM вызов
-GLOBAL_CANDIDATES: int = 5               # Ширина глобального поиска
+GLOBAL_CANDIDATES: int = 1               # Ширина глобального поиска
 GLOBAL_TRIGGER_INTERVAL: int = 2         # Каждые N поколений
 GLOBAL_HISTORY_WINDOW: int = 15          # Сколько узлов истории анализировать
-MAX_GENERATIONS: int = 5                 # Максимальное число поколений
+MAX_GENERATIONS: int = 3                 # Максимальное число поколений
 POPULATION_SIZE: int = 2                 # Сколько промптов держим в активном пуле
 PATIENCE: int = 2                        # Поколений без улучшения до остановки
-MIN_IMPROVEMENT: float = 0.005           # Минимальное улучшение для продолжения
+MIN_IMPROVEMENT: float = 0.01            # Минимальное улучшение для продолжения
 DIVERSITY_BONUS: float = 0.03            # Бонус за разнообразие
 SIMILARITY_THRESHOLD: float = 0.85       # Порог схожести
 TEMPERATURE: float = 0.1                 # Температура для LLM
@@ -61,9 +61,9 @@ CACHE_TTL_SECONDS: int = 7 * 24 * 3600   # TTL для записей в кэше
 
 # Веса метрик для оценки промптов
 METRIC_WEIGHTS: Dict[str, float] = {
-    "accuracy": 0.2,
-    "safety": 0.2,
-    "robustness": 0.2,
-    "efficiency": 0.2,
-    "f1": 0.2,
+    "accuracy": 0.6,
+    "safety": 0.1,
+    "robustness": 0.1,
+    "efficiency": 0.1,
+    "f1": 0.1,
 }
