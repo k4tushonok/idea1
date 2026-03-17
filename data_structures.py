@@ -3,7 +3,12 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 import uuid
-from config import METRIC_WEIGHTS, LINEAGE_RECENT_OPS_LIMIT
+from config import (
+    METRIC_WEIGHTS,
+    LINEAGE_RECENT_OPS_LIMIT,
+    USE_LLM_CORRECTNESS_CHECK,
+    LOCAL_SIMILARITY_THRESHOLD,
+)
 
 class OptimizationSource(Enum):
     """Источник оптимизации промпта"""
@@ -50,6 +55,9 @@ class Example:
             print("LLM correctness evaluation failed during direct comparison")
             pass
 
+        if not USE_LLM_CORRECTNESS_CHECK:
+            return self._is_similar_locally(self.actual_output, self.expected_output)
+
         prompt = (f"There are two answers on the same question. "
                   f"'Expected output' is a true answer used as label during dataset training. "
                   f"'Actual answer' is an answer of LLM model. "
@@ -66,6 +74,22 @@ class Example:
         except Exception:
             print("LLM correctness evaluation failed")
             return False
+
+    @staticmethod
+    def _is_similar_locally(actual: str, expected: str) -> bool:
+        if actual is None or expected is None:
+            return False
+        a = [t for t in actual.lower().split() if t]
+        e = [t for t in expected.lower().split() if t]
+        if not a or not e:
+            return False
+        set_a = set(a)
+        set_e = set(e)
+        overlap = len(set_a & set_e)
+        union = len(set_a | set_e)
+        if union == 0:
+            return False
+        return (overlap / union) >= LOCAL_SIMILARITY_THRESHOLD
 
     def to_dict(self) -> Dict:
         return asdict(self)

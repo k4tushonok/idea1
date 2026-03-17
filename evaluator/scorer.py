@@ -6,7 +6,7 @@ from llm.llm_client import BaseLLM
 from functools import lru_cache
 import random
 from tqdm import tqdm
-from config import METRIC_WEIGHTS, MAX_EXAMPLES_PER_NODE
+from config import METRIC_WEIGHTS, MAX_EXAMPLES_PER_NODE, USE_LLM_EDIT_DISTANCE
 import json
 from config import BATCH_EVAL_SIZE
 
@@ -164,21 +164,21 @@ class PromptScorer:
         1.0 — промпты принципиально разные
         """
 
-        template = Templates.load_template("evaluation")
-        prompt = template.format(prompt1=prompt1, prompt2=prompt2)
-        
-        try:
-            result = self.llm.invoke(prompt=prompt)
-            return max(0.0, min(1.0, float(result)))
-        except Exception as e:
-            print(f"LLM distance evaluation failed, falling back: {e}")
+        if USE_LLM_EDIT_DISTANCE:
+            template = Templates.load_template("evaluation")
+            prompt = template.format(prompt1=prompt1, prompt2=prompt2)
+            try:
+                result = self.llm.invoke(prompt=prompt)
+                return max(0.0, min(1.0, float(result)))
+            except Exception as e:
+                print(f"LLM distance evaluation failed, falling back: {e}")
 
-            words1 = set(prompt1.lower().split())
-            words2 = set(prompt2.lower().split())
-            if not words1 and not words2:
-                return 0.0
-            similarity = len(words1 & words2) / max(len(words1 | words2), 1)
-            return 1.0 - similarity
+        words1 = set(prompt1.lower().split())
+        words2 = set(prompt2.lower().split())
+        if not words1 and not words2:
+            return 0.0
+        similarity = len(words1 & words2) / max(len(words1 | words2), 1)
+        return 1.0 - similarity
 
     def calculate_pairwise_metric(self, nodes: List[PromptNode], max_distance_pairs: int) -> List[float]:
         values = []
