@@ -42,7 +42,7 @@ class HierarchicalOptimizer:
         print("Evaluating initial prompt...")
         initial_node = self.scorer.evaluate_node(
             initial_node,
-            train_examples,
+            validation_examples,
             execute=True
         )
         

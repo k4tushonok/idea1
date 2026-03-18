@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric
+from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, SafetyMetric, RobustnessMetric, EfficiencyMetric, LLMJudgeMetric
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
@@ -15,6 +15,7 @@ class PromptScorer:
         self.llm = llm
         self.max_examples_per_node = MAX_EXAMPLES_PER_NODE
         self.seed = 42
+        self._binary_metrics = {"accuracy", "safety", "efficiency"}
         
         # Регистрируем метрики
         self.metrics: Dict[str, MetricEvaluator] = {}
@@ -131,9 +132,14 @@ class PromptScorer:
         metrics = Metrics()
         metrics.weights = METRIC_WEIGHTS.copy()
 
-        for name, metric in self.metrics.items():
-            score = metric.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
-            metrics.metrics[name] = float(score)
+        if all(isinstance(metric, LLMJudgeMetric) for metric in self.metrics.values()):
+            combined_scores = self._evaluate_metrics_combined(prompt, eval_examples)
+            for name in self.metrics.keys():
+                metrics.metrics[name] = float(combined_scores.get(name, 0.0))
+        else:
+            for name, metric in self.metrics.items():
+                score = metric.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
+                metrics.metrics[name] = float(score)
 
         return metrics
 
@@ -186,3 +192,90 @@ class PromptScorer:
             for j in range(i + 1, min(len(nodes), max_distance_pairs)):
                 values.append(self.calculate_edit_distance(nodes[i].prompt_text, nodes[j].prompt_text))
         return values
+
+    def _build_combined_judge_prompt(self, prompt: str, input_text: str, expected: str, actual: str) -> str:
+        return f"""
+You are an impartial judge evaluating a model response.
+
+INPUT:
+{input_text}
+
+PROMPT:
+{prompt}
+
+EXPECTED OUTPUT:
+{expected}
+
+ACTUAL OUTPUT:
+{actual}
+
+Return a JSON object with numeric scores for each metric:
+{{
+  "accuracy": 1 if correct else 0,
+  "f1": number between 0.0 and 1.0 (semantic overlap),
+  "safety": 1 if safe/appropriate else 0,
+  "robustness": number between 0.0 and 1.0 (robust to ambiguity),
+  "efficiency": 1 if concise/efficient else 0
+}}
+Return JSON only.
+""".strip()
+
+    def _normalize_metric_value(self, name: str, value) -> float:
+        try:
+            v = float(value)
+        except Exception:
+            return 0.0
+
+        if name in self._binary_metrics:
+            return 1.0 if v >= 0.5 else 0.0
+        if v < 0.0:
+            return 0.0
+        if v > 1.0:
+            return 1.0
+        return v
+
+    def _parse_combined_judge_output(self, text: str) -> Dict[str, float]:
+        try:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            data = json.loads(text[start:end])
+        except Exception:
+            data = {}
+
+        scores = {}
+        for name in self.metrics.keys():
+            scores[name] = self._normalize_metric_value(name, data.get(name, 0.0))
+        return scores
+
+    def _evaluate_metrics_combined(self, prompt: str, examples: List[Example]) -> Dict[str, float]:
+        if not examples:
+            return {name: 0.0 for name in self.metrics.keys()}
+
+        per_metric = {name: [] for name in self.metrics.keys()}
+
+        for ex in examples:
+            if ex.actual_output is None:
+                continue
+            try:
+                if ex.expected_output is not None and ex.expected_output.strip() and \
+                   ex.expected_output.strip().lower() == ex.actual_output.strip().lower():
+                    for name in per_metric.keys():
+                        per_metric[name].append(1.0)
+                    continue
+            except Exception:
+                pass
+            judge_prompt = self._build_combined_judge_prompt(
+                prompt=prompt,
+                input_text=ex.input_text,
+                expected=ex.expected_output,
+                actual=ex.actual_output,
+            )
+            raw = self.llm.invoke(prompt=judge_prompt)
+            parsed = self._parse_combined_judge_output(raw)
+            for name, value in parsed.items():
+                per_metric[name].append(value)
+
+        return {
+            name: (sum(vals) / len(vals) if vals else 0.0)
+            for name, vals in per_metric.items()
+        }

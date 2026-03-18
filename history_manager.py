@@ -117,10 +117,7 @@ class HistoryManager:
         for node in nodes:
             node_values = []
             for metric in DEFAULT_PARETO_METRICS:
-                if hasattr(node.metrics, metric):
-                    node_values.append(getattr(node.metrics, metric))
-                else:
-                    node_values.append(0.0)
+                node_values.append(node.metrics.metrics.get(metric, 0.0))
             values.append(node_values)
         
         values = np.array(values)

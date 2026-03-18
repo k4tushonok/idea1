@@ -146,6 +146,20 @@ class Templates:
         for i, node_info in enumerate(summary['best_nodes'][:3], 1):
             best_prompts_block += f"{i}. Score {node_info['score']:.3f} (Gen {node_info['generation']}):\n"
             best_prompts_block += f"   {node_info['prompt_preview']}\n\n"
+
+        best_elements = history_analysis.get("best_elements", {})
+        common_phrases = best_elements.get("common_phrases", [])
+        if common_phrases:
+            common_phrases_block = "\n".join(f"- {p}" for p in common_phrases)
+        else:
+            common_phrases_block = "None identified"
+
+        worst_prompts_block = ""
+        for i, node in enumerate(history_analysis.get("worst_nodes", [])[:3], 1):
+            worst_prompts_block += f"{i}. Score {node.metrics.composite_score():.3f} (Gen {node.generation}):\n"
+            worst_prompts_block += f"   {node.prompt_text[:100]}...\n\n"
+        if not worst_prompts_block:
+            worst_prompts_block = "None identified"
         
         failed_directions_block = ""
         if history_analysis.get("failed_directions"):
@@ -176,6 +190,8 @@ class Templates:
             diversity_score=diversity['diversity_score'],
             needs_diversification=diversity['needs_diversification'],
             best_prompts_block=best_prompts_block,
+            common_phrases_block=common_phrases_block,
+            worst_prompts_block=worst_prompts_block,
             failed_directions_block=failed_directions_block,
             unexplored_space_block=unexplored_space_block
         )

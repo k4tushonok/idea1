@@ -70,7 +70,7 @@ class LocalOptimizer:
                     print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
                 break
             success_examples = current_best.evaluation_examples.get("success", [])
-            print(f"Failures: {len(failure_examples)}, Successes: {len(success_examples)}")
+            # print(f"Failures: {len(failure_examples)}, Successes: {len(success_examples)}")
             
             # Шаг 2: Генерируем текстовые градиенты
             gradients = self._generate_gradients(current_best, failure_examples, success_examples)
@@ -81,7 +81,7 @@ class LocalOptimizer:
             print(f"Generated {len(candidates)} candidate prompts")
             
             # Шаг 4: Оцениваем кандидатов
-            evaluated_candidates = self._evaluate_candidates(candidates, train_examples)
+            evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
             
             # Шаг 5: Выбираем лучшего кандидата

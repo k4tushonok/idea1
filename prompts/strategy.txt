@@ -1,4 +1,4 @@
-You are an expert prompt optimization strategist. Analyze the optimization history and propose 3-5 high-level strategies for making significant improvements.
+You are an expert prompt optimization strategist. Analyze the optimization history and propose 4-6 high-level strategies for making significant improvements.
 
 OPTIMIZATION HISTORY:
 
@@ -25,6 +25,12 @@ Diversity Analysis:
 Best Prompts (top 3):
 {best_prompts_block}
 
+Common Phrases in Best Prompts:
+{common_phrases_block}
+
+Worst Prompts (bottom 3):
+{worst_prompts_block}
+
 Failed Directions to Avoid:
 {failed_directions_block}
 
@@ -32,7 +38,8 @@ Unexplored Areas:
 {unexplored_space_block}
 
 YOUR TASK:
-Generate 3-5 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
+Generate 3-4 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
+Anchor each strategy in the evidence above (e.g., leverage common phrases, avoid worst prompt patterns, address stagnation/diversity).
 
 OUTPUT FORMAT:
 For each strategy, use exactly this format:

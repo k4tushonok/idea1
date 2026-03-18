@@ -23,6 +23,8 @@ from config import (TOP_BEST_NODES,
                     LOW_DIVERSITY_THRESHOLD,
                     MAX_DIVERSITY_SAMPLES,
                     MIN_NODES_FOR_DIVERSITY,
+                    GLOBAL_CANDIDATES,
+                    SIMILARITY_THRESHOLD,
                     GLOBAL_TRIGGER_INTERVAL,
                     COMMON_SUBSEQ_LENGTHS,
                     TOP_COMMON_SUBSEQ,
@@ -82,7 +84,7 @@ class GlobalOptimizer:
         
         # Шаг 4: Оценка кандидатов
         print("\nStep 4: Evaluating global candidates...")
-        evaluated_candidates = self._evaluate_global_candidates(candidates, train_examples)
+        evaluated_candidates = self._evaluate_global_candidates(candidates, validation_examples)
         
         # Шаг 5: Анализ результатов
         print("\nStep 5: Analyzing results...")
@@ -101,6 +103,7 @@ class GlobalOptimizer:
             "summary": self.history.get_optimization_summary(),
             "best_nodes": best_nodes,
             "best_node": best_nodes[0] if best_nodes else None,
+            "worst_nodes": self._get_worst_nodes(),
             "patterns": self._identify_patterns(best_nodes),
             "stagnation": self._analyze_stagnation(best_nodes),
             "diversity": self._analyze_diversity(),
@@ -108,6 +111,14 @@ class GlobalOptimizer:
             "failed_directions": self._identify_failed_directions(),
             "unexplored_space": self._identify_unexplored_space()
         }
+
+    def _get_worst_nodes(self, bottom_k: int = 3) -> List[PromptNode]:
+        """Получение худших узлов по композитной метрике"""
+        nodes = self.history.get_evaluated_nodes()
+        if not nodes:
+            return []
+        nodes.sort(key=lambda n: n.metrics.composite_score())
+        return nodes[:bottom_k]
     
     def _identify_patterns(self, best_nodes: List[PromptNode]) -> Dict:
         """Определение паттернов в истории оптимизации"""
@@ -241,17 +252,35 @@ class GlobalOptimizer:
             return strategies
         except Exception as e:
             print(f"Error generating strategies: {e}")
+            return []
     
     def _apply_strategies(self, strategies: List[Dict], history_analysis: Dict, current_generation: int) -> List[PromptNode]:
         """Применение стратегий и создание глобальных кандидатов"""
         candidates = []
         for strategy in strategies:
             handler = self._strategy_dispatch.get(strategy["type"], self.editor.apply_generic_strategy)
-            node = handler(strategy, history_analysis, current_generation)
-            if node:
+
+            for variant_idx in range(GLOBAL_CANDIDATES):
+                variation_id = variant_idx + 1 if GLOBAL_CANDIDATES > 1 else None
+                strategy_payload = dict(strategy)
+                if variation_id is not None:
+                    strategy_payload["variant_id"] = variation_id
+
+                node = handler(strategy_payload, history_analysis, current_generation, variation_id=variation_id)
+                if not node:
+                    continue
+
+                # Фильтрация дубликатов по схожести
+                is_duplicate = any(
+                    1.0 - self.scorer.calculate_edit_distance(node.prompt_text, c.prompt_text) > SIMILARITY_THRESHOLD
+                    for c in candidates
+                )
+                if is_duplicate:
+                    continue
+
                 candidates.append(node)
                 self.applied_strategies.append(
-                    {"generation": current_generation, "strategy": strategy, "candidate_id": node.id}
+                    {"generation": current_generation, "strategy": strategy_payload, "candidate_id": node.id}
                 )
         return candidates
     

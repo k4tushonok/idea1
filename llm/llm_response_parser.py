@@ -21,6 +21,7 @@ LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]\s*|[-*•]\s+)(.+)$")
 PRIORITY_RE = re.compile(r"(?:priority|score)?\s*:?\s*([01](?:\.\d+)?)", re.IGNORECASE)
 CODE_FENCE_STRIP_RE = re.compile(r"^```.*?\n|\n```$", re.DOTALL)
 GRADIENT_SPLIT_RE = re.compile(r"(###\s*GRADIENT.*?)(?=###\s*GRADIENT|\Z)", re.DOTALL | re.IGNORECASE)
+VARIANT_SPLIT_RE = re.compile(r'VARIANT\s+\d+:', re.IGNORECASE)
 
 class MarkdownParser:
     @staticmethod
@@ -116,8 +117,8 @@ class VariantParser:
     @staticmethod
     def parse_variants(response_text: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> List[PromptNode]:
         nodes: List[PromptNode] = []
-
-        for block in MarkdownParser.extract_code_blocks(response_text):
+        variant_blocks = VARIANT_SPLIT_RE.split(response_text)
+        for block in variant_blocks[1:]:
             node = VariantParser.parse_single_variant(block, original_prompt, gradient, parent_node)
             if node:
                 nodes.append(node)

@@ -44,9 +44,18 @@ class PromptEditor:
                 )
             ] 
     
-    def apply_specific_operation(self, current_prompt: str, operation_type: OperationType, content: str, parent_node: Optional[PromptNode] = None) -> PromptNode:
+    def apply_specific_operation(
+        self,
+        current_prompt: str,
+        operation_type: OperationType,
+        content: str,
+        parent_node: Optional[PromptNode] = None,
+        variation_id: Optional[int] = None,
+    ) -> PromptNode:
         """Применение конкретной операции редактирования к промпту"""
         prompt = Templates.build_specific_prompt(operation_type, current_prompt, content)
+        if variation_id is not None:
+            prompt = f"{prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
 
         try:
             if prompt in self._cache:
@@ -75,12 +84,19 @@ class PromptEditor:
             operations=[operation]
         )
         
-    def combine_prompts(self, prompts: List[str], combination_strategy: str = "best_elements") -> PromptNode:
+    def combine_prompts(
+        self,
+        prompts: List[str],
+        combination_strategy: str = "best_elements",
+        variation_id: Optional[int] = None,
+    ) -> PromptNode:
         """Комбинирование нескольких успешных промптов"""
         if len(prompts) < 2:
             raise ValueError("Need at least 2 prompts to combine")
         
         combining_prompt = Templates.build_combine_prompt(prompts, combination_strategy)
+        if variation_id is not None:
+            combining_prompt = f"{combining_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         
         try:
             if combining_prompt in self._cache:
@@ -105,57 +121,74 @@ class PromptEditor:
             operations=[operation]
         )
         
-    def apply_editor_op(self, best_node: PromptNode, op_type: OperationType, action: str, generation: int, strategy: Dict) -> PromptNode:
-        node = self.apply_specific_operation(best_node.prompt_text, op_type, action, parent_node=best_node)
+    def apply_editor_op(
+        self,
+        best_node: PromptNode,
+        op_type: OperationType,
+        action: str,
+        generation: int,
+        strategy: Dict,
+        variation_id: Optional[int] = None,
+    ) -> PromptNode:
+        node = self.apply_specific_operation(
+            best_node.prompt_text,
+            op_type,
+            action,
+            parent_node=best_node,
+            variation_id=variation_id,
+        )
         node.generation = generation
         node.metadata["global_strategy"] = strategy
         return node 
     
-    def apply_specialize_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_specialize_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Специализация промпта"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_node = best_nodes[0]
-        return self.apply_editor_op(best_node, OperationType.ADD_CONSTRAINT, strategy["action"], generation, strategy)
+        return self.apply_editor_op(best_node, OperationType.ADD_CONSTRAINT, strategy["action"], generation, strategy, variation_id)
     
-    def apply_expand_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_expand_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Расширение промпта"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_node = best_nodes[0]
-        return self.apply_editor_op(best_node, OperationType.ADD_INSTRUCTION, strategy["action"], generation, strategy)
+        return self.apply_editor_op(best_node, OperationType.ADD_INSTRUCTION, strategy["action"], generation, strategy, variation_id)
 
-    def apply_restructure_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_restructure_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Реструктуризация промпта"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_node = best_nodes[0]
-        return self.apply_editor_op(best_node, OperationType.RESTRUCTURE, strategy["action"], generation, strategy)
+        return self.apply_editor_op(best_node, OperationType.RESTRUCTURE, strategy["action"], generation, strategy, variation_id)
 
-    def apply_generic_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_generic_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Общий подход для неизвестных типов стратегий"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_node = best_nodes[0]
-        return self.apply_editor_op(best_node, OperationType.MODIFY_INSTRUCTION, strategy["action"], generation, strategy)
+        return self.apply_editor_op(best_node, OperationType.MODIFY_INSTRUCTION, strategy["action"], generation, strategy, variation_id)
     
-    def apply_simplify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_simplify_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Упрощение промпта"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_node = best_nodes[0]
         simplify_prompt = Templates.build_simplify_prompt(best_node.prompt_text, strategy['action'])
+        if variation_id is not None:
+            simplify_prompt = f"{simplify_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         try:
             if simplify_prompt in self._cache:
-                simplified_text = self._cache[simplify_prompt]
+                simplified_text = MarkdownParser.strip_code_fences(self._cache[simplify_prompt])
             else:
                 simplified_text = self.llm.invoke(prompt=simplify_prompt)
                 self._cache[simplify_prompt] = simplified_text
+                simplified_text = MarkdownParser.strip_code_fences(simplified_text)
             operation = EditOperation(operation_type=OperationType.REPHRASE, description=f"SIMPLIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=simplified_text,
@@ -169,19 +202,22 @@ class PromptEditor:
             print(f"    Error in simplify: {e}")
             return None
         
-    def apply_diversify_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_diversify_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Создание разнообразного промпта"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         best_prompts_texts = [node.prompt_text if isinstance(node, PromptNode) else str(node) for node in best_nodes]
         diversify_prompt = Templates.build_diversify_prompt(best_prompts_texts, strategy['action'])
+        if variation_id is not None:
+            diversify_prompt = f"{diversify_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         try:
             if diversify_prompt in self._cache:
-                new_prompt_text = self._cache[diversify_prompt]
+                new_prompt_text = MarkdownParser.strip_code_fences(self._cache[diversify_prompt])
             else:
                 new_prompt_text = self.llm.invoke(prompt=diversify_prompt)
                 self._cache[diversify_prompt] = new_prompt_text
+                new_prompt_text = MarkdownParser.strip_code_fences(new_prompt_text)
             operation = EditOperation(operation_type=OperationType.RESTRUCTURE, description=f"DIVERSIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=new_prompt_text,
@@ -195,14 +231,18 @@ class PromptEditor:
             print(f"    Error in diversify: {e}")
             return None
         
-    def apply_combine_strategy(self, strategy: Dict, analysis: Dict, generation: int) -> Optional[PromptNode]:
+    def apply_combine_strategy(self, strategy: Dict, analysis: Dict, generation: int, variation_id: Optional[int] = None) -> Optional[PromptNode]:
         """Комбинирование лучших промптов"""
         best_nodes = analysis["best_elements"]["prompts"]
         if not best_nodes or len(best_nodes) == 0:
             return None
         # Извлекаем текст из PromptNode объектов
         best_prompts_texts = [node.prompt_text if isinstance(node, PromptNode) else str(node) for node in best_nodes]
-        combined_node = self.combine_prompts(best_prompts_texts[:MAX_PROMPTS_TO_COMBINE], combination_strategy="best_elements")
+        combined_node = self.combine_prompts(
+            best_prompts_texts[:MAX_PROMPTS_TO_COMBINE],
+            combination_strategy="best_elements",
+            variation_id=variation_id,
+        )
         combined_node.generation = generation
         combined_node.source = OptimizationSource.GLOBAL
         combined_node.metadata["global_strategy"] = strategy
