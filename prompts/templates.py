@@ -126,7 +126,7 @@ class Templates:
     def build_diversify_prompt(prompts: List[str], strategy: str) -> str:
         best_prompts_block = ""
         for i, prompt in enumerate(prompts[:2], 1):
-            best_prompts_block += f"\nApproach {i}:\n{prompt[:300]}...\n"
+            best_prompts_block += f"\nREFERENCE PROMPT {i}:\n```\n{prompt[:300]}...\n```\n"
         template = Templates.load_template("diversify")
         return template.format(best_prompts_block=best_prompts_block, specific_guidance=strategy)
     

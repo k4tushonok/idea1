@@ -1,4 +1,4 @@
-Create a completely different approach to this prompt optimization task.
+Create a substantially different prompt for this optimization task.
 
 EXISTING TOP PROMPTS (for reference, but create something different):
 {best_prompts_block}
@@ -12,4 +12,8 @@ REQUIREMENTS:
 SPECIFIC GUIDANCE:
 {specific_guidance}
 
-Generate a complete new prompt:
+OUTPUT FORMAT:
+Return only the new prompt text inside a single fenced code block.
+Do not add labels, headings, or prefixes (for example: "Approach:", "Variant:", "Prompt:").
+
+Generate the complete new prompt:

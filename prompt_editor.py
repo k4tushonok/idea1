@@ -59,11 +59,11 @@ class PromptEditor:
 
         try:
             if prompt in self._cache:
-                new_prompt = MarkdownParser.strip_code_fences(self._cache[prompt])
+                new_prompt = MarkdownParser.normalize_prompt_text(self._cache[prompt])
             else:
                 resp = self.llm.invoke(prompt=prompt)
                 self._cache[prompt] = resp
-                new_prompt = MarkdownParser.strip_code_fences(resp)
+                new_prompt = MarkdownParser.normalize_prompt_text(resp)
         except Exception:
             new_prompt = current_prompt
 
@@ -100,11 +100,11 @@ class PromptEditor:
         
         try:
             if combining_prompt in self._cache:
-                combined_prompt = MarkdownParser.strip_code_fences(self._cache[combining_prompt])
+                combined_prompt = MarkdownParser.normalize_prompt_text(self._cache[combining_prompt])
             else:
                 resp = self.llm.invoke(prompt=combining_prompt)
                 self._cache[combining_prompt] = resp
-                combined_prompt = MarkdownParser.strip_code_fences(resp)
+                combined_prompt = MarkdownParser.normalize_prompt_text(resp)
         except Exception:
             combined_prompt = prompts[0]
 
@@ -184,11 +184,11 @@ class PromptEditor:
             simplify_prompt = f"{simplify_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         try:
             if simplify_prompt in self._cache:
-                simplified_text = MarkdownParser.strip_code_fences(self._cache[simplify_prompt])
+                simplified_text = MarkdownParser.normalize_prompt_text(self._cache[simplify_prompt])
             else:
                 simplified_text = self.llm.invoke(prompt=simplify_prompt)
                 self._cache[simplify_prompt] = simplified_text
-                simplified_text = MarkdownParser.strip_code_fences(simplified_text)
+                simplified_text = MarkdownParser.normalize_prompt_text(simplified_text)
             operation = EditOperation(operation_type=OperationType.REPHRASE, description=f"SIMPLIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=simplified_text,
@@ -213,11 +213,11 @@ class PromptEditor:
             diversify_prompt = f"{diversify_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         try:
             if diversify_prompt in self._cache:
-                new_prompt_text = MarkdownParser.strip_code_fences(self._cache[diversify_prompt])
+                new_prompt_text = MarkdownParser.normalize_prompt_text(self._cache[diversify_prompt])
             else:
                 new_prompt_text = self.llm.invoke(prompt=diversify_prompt)
                 self._cache[diversify_prompt] = new_prompt_text
-                new_prompt_text = MarkdownParser.strip_code_fences(new_prompt_text)
+                new_prompt_text = MarkdownParser.normalize_prompt_text(new_prompt_text)
             operation = EditOperation(operation_type=OperationType.RESTRUCTURE, description=f"DIVERSIFY: {strategy['description']}")
             node = PromptNode(
                 prompt_text=new_prompt_text,
@@ -247,4 +247,3 @@ class PromptEditor:
         combined_node.source = OptimizationSource.GLOBAL
         combined_node.metadata["global_strategy"] = strategy
         return combined_node
-

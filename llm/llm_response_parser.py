@@ -22,6 +22,7 @@ PRIORITY_RE = re.compile(r"(?:priority|score)?\s*:?\s*([01](?:\.\d+)?)", re.IGNO
 CODE_FENCE_STRIP_RE = re.compile(r"^```.*?\n|\n```$", re.DOTALL)
 GRADIENT_SPLIT_RE = re.compile(r"(###\s*GRADIENT.*?)(?=###\s*GRADIENT|\Z)", re.DOTALL | re.IGNORECASE)
 VARIANT_SPLIT_RE = re.compile(r'VARIANT\s+\d+:', re.IGNORECASE)
+LEADING_META_PREFIX_RE = re.compile(r"^\s*(?:approach|strategy|variant|prompt)\s*(?:\d+)?\s*:\s*", re.IGNORECASE)
 
 class MarkdownParser:
     @staticmethod
@@ -35,6 +36,22 @@ class MarkdownParser:
     @staticmethod
     def strip_code_fences(text: str) -> str:
         return CODE_FENCE_STRIP_RE.sub("", text).strip()
+
+    @staticmethod
+    def normalize_prompt_text(text: str) -> str:
+        cleaned = text.strip()
+        code_blocks = MarkdownParser.extract_code_blocks(cleaned)
+        if code_blocks:
+            cleaned = code_blocks[0]
+        else:
+            cleaned = MarkdownParser.strip_code_fences(cleaned)
+
+        for _ in range(2):
+            updated = LEADING_META_PREFIX_RE.sub("", cleaned, count=1).strip()
+            if updated == cleaned:
+                break
+            cleaned = updated
+        return cleaned
 
 class SectionParser:
     @staticmethod
@@ -93,11 +110,16 @@ class VariantParser:
     def extract_prompt(block: str) -> Optional[str]:
         match = PROMPT_BLOCK_RE.search(block)
         if match:
-            return match.group(1).strip()
-        if block and len(block.strip()) >= MIN_PROMPT_LENGTH:
-            return block.strip()
+            return MarkdownParser.normalize_prompt_text(match.group(1))
         match = PROMPT_FALLBACK_RE.search(block)
-        return match.group(1).strip() if match else None
+        if match:
+            return MarkdownParser.normalize_prompt_text(match.group(1))
+        code_blocks = MarkdownParser.extract_code_blocks(block)
+        if code_blocks:
+            return MarkdownParser.normalize_prompt_text(code_blocks[0])
+        if block and len(block.strip()) >= MIN_PROMPT_LENGTH:
+            return MarkdownParser.normalize_prompt_text(block)
+        return None
 
     @staticmethod
     def extract_description(block: str) -> str:
@@ -130,6 +152,7 @@ class VariantParser:
         new_prompt = VariantParser.extract_prompt(block)
         if not new_prompt:
             new_prompt = block
+        new_prompt = MarkdownParser.normalize_prompt_text(new_prompt)
         if len(new_prompt) < MIN_PROMPT_LENGTH:
             return None
 
