@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 import time
 import random
 from data_structures import Example, PromptNode, TextGradient
@@ -6,6 +6,7 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
+from diagnostics import is_enabled, prompt_id, preview_text
 from config import LOCAL_ITERATIONS_PER_GENERATION, MIN_IMPROVEMENT, LOCAL_BATCH_SIZE, CLUSTERING_FAILURE_MULTIPLIER, MAX_CONTEXT_OPERATIONS, MIN_EXAMPLES_FOR_CONTRASTIVE, PATIENCE, SIMILARITY_THRESHOLD
 
 class LocalOptimizer:
@@ -36,7 +37,7 @@ class LocalOptimizer:
         # Оцениваем начальный узел, если не оценен
         if not starting_node.is_evaluated:
             print(f"Evaluating starting node...")
-            starting_node = self.scorer.evaluate_node(starting_node, validation_examples, execute=True)
+            starting_node = self.scorer.evaluate_node(starting_node, validation_examples, execute=True, split="validation")
             self.history.update_node(starting_node.id, starting_node)
             print(f"Starting score: {starting_node.metrics.composite_score():.3f}")
         
@@ -51,9 +52,16 @@ class LocalOptimizer:
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
             print(f"\n--- Iteration {iteration + 1} ---")
+            if is_enabled():
+                print(
+                    f"[diag] local iteration state: current_best_id={current_best.id} "
+                    f"prompt_id={prompt_id(current_best.prompt_text)} score={best_score:.3f}"
+                )
             
             # Шаг 1: Получаем провалы текущего лучшего промпта
-            failure_examples = self._get_failure_examples(current_best, train_examples)
+            failure_examples, success_examples = self._get_train_examples_outcomes(current_best, train_examples)
+            if is_enabled():
+                print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
             if not failure_examples:
                 print("No failures found - prompt is perfect on training set!")
                 # Все еще выполняем валидацию на validation_examples
@@ -69,7 +77,6 @@ class LocalOptimizer:
                     print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
                     print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
                 break
-            success_examples = current_best.evaluation_examples.get("success", [])
             # print(f"Failures: {len(failure_examples)}, Successes: {len(success_examples)}")
             
             # Шаг 2: Генерируем текстовые градиенты
@@ -146,27 +153,41 @@ class LocalOptimizer:
         
         return current_best
     
-    def _get_failure_examples(self, node: PromptNode, examples: List[Example]) -> List[Example]:
-        """Получение примеров, на которых промпт ошибается"""
-        # Если узел уже оценен, берем из него
-        if node.is_evaluated and node.evaluation_examples.get("failures"):
-            failures = node.evaluation_examples["failures"]
-            # Если провалов много, берем случайное подмножество для разнообразия
-            if len(failures) > LOCAL_BATCH_SIZE:
-                failures = random.sample(failures, LOCAL_BATCH_SIZE)
-            return failures
-        
-        # Иначе выполняем промпт на примерах
+    def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example]]:
+        """Всегда вычисляет train-failures/train-successes из train split."""
         print(f"Executing prompt on {len(examples)} examples to find failures...")
-        executed_examples = self.scorer.execute_prompt_batch(node.prompt_text, examples)
+        eval_examples = [
+            Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata))
+            for ex in examples
+        ]
+        executed_examples = self.scorer.execute_prompt_batch(node.prompt_text, eval_examples)
         
-        # Фильтруем провалы
-        failures = [ex for ex in executed_examples if not ex.is_correct_by_llm(self.llm)]
-        return failures
+        failures: List[Example] = []
+        successes: List[Example] = []
+        for ex in executed_examples:
+            if ex.actual_output and (ex.is_correct() or ex.is_correct_by_llm(self.llm)):
+                successes.append(ex)
+            else:
+                failures.append(ex)
+
+        # Ограничиваем размер батча провалов для генерации градиентов
+        if len(failures) > LOCAL_BATCH_SIZE:
+            failures = random.sample(failures, LOCAL_BATCH_SIZE)
+        if is_enabled():
+            print(
+                f"[diag] train outcomes after cap: failures={len(failures)} successes={len(successes)} "
+                f"failure_rate={(len(failures) / max(len(executed_examples), 1)):.3f}"
+            )
+        return failures, successes
     
     def _generate_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example]) -> List[TextGradient]:
         """Генерация текстовых градиентов на основе провалов и успехов"""
         print("Generating text gradients...")
+        if is_enabled():
+            print(
+                f"[diag] gradient input: prompt_id={prompt_id(node.prompt_text)} "
+                f"failures={len(failure_examples)} successes={len(success_examples)}"
+            )
         context = { "generation": node.generation, "previous_attempts": len(self.history.get_lineage(node.id)) }
 
         if node.generation > 0:
@@ -189,7 +210,14 @@ class LocalOptimizer:
                 gradients.insert(0, contrastive_gradient)
             except Exception as e:
                 print(f"Failed to generate contrastive gradient: {e}")
-        
+        if is_enabled():
+            for idx, gradient in enumerate(gradients, start=1):
+                cluster = gradient.metadata.get("cluster", "n/a")
+                print(
+                    f"[diag] gradient {idx}: priority={gradient.priority:.3f} "
+                    f"suggestions={len(gradient.specific_suggestions)} cluster={cluster}"
+                )
+                print(f"[diag]   direction='{preview_text(gradient.suggested_direction, 220)}'")
         return gradients
     
     def _generate_candidates(self, parent_node: PromptNode, gradients: List[TextGradient]) -> List[PromptNode]:
@@ -200,6 +228,13 @@ class LocalOptimizer:
             print(f"  Generating variants from gradient {i+1}/{len(gradients)}")
             try:
                 variants = self.editor.generate_variants(parent_node.prompt_text, gradient, parent_node=parent_node)
+                if is_enabled():
+                    print(f"[diag] variants generated from gradient {i+1}: {len(variants)}")
+                    for v_idx, variant in enumerate(variants, start=1):
+                        print(
+                            f"[diag]   variant {v_idx}: node_id={variant.id} "
+                            f"prompt_id={prompt_id(variant.prompt_text)} len={len(variant.prompt_text)}"
+                        )
                 all_candidates.extend(variants)
             except Exception as e:
                 print(f"    Error generating variants: {e}")
@@ -229,7 +264,12 @@ class LocalOptimizer:
                 continue
             
             print(f"  Evaluating candidate {i+1}/{len(candidates)}...", end=" ")
-            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True)
+            if is_enabled():
+                print(
+                    f"\n[diag] candidate details: node_id={candidate.id} "
+                    f"prompt_id={prompt_id(candidate.prompt_text)} len={len(candidate.prompt_text)}"
+                )
+            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation")
             score = candidate.metrics.composite_score()
             print(f"Score: {score:.3f}")
                 

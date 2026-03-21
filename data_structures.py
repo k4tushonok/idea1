@@ -201,6 +201,7 @@ class PromptNode:
         "success": [],
         "failures": []
     })
+    evaluation_examples_by_split: Dict[str, Dict[str, List[Example]]] = field(default_factory=dict)
     
     def add_child(self, child_id: str):
         """Добавление дочернего узла"""
@@ -227,6 +228,13 @@ class PromptNode:
                 "success": [ex.to_dict() for ex in self.evaluation_examples["success"]],
                 "failures": [ex.to_dict() for ex in self.evaluation_examples["failures"]]
             },
+            "evaluation_examples_by_split": {
+                split: {
+                    "success": [ex.to_dict() for ex in by_split.get("success", [])],
+                    "failures": [ex.to_dict() for ex in by_split.get("failures", [])],
+                }
+                for split, by_split in self.evaluation_examples_by_split.items()
+            },
             "timestamp": self.timestamp.isoformat(),
             "metadata": self.metadata,
             "is_evaluated": self.is_evaluated,
@@ -243,6 +251,14 @@ class PromptNode:
         data["evaluation_examples"] = {
             "success": [Example.from_dict(ex) for ex in data["evaluation_examples"]["success"]],
             "failures": [Example.from_dict(ex) for ex in data["evaluation_examples"]["failures"]]
+        }
+        raw_by_split = data.get("evaluation_examples_by_split", {})
+        data["evaluation_examples_by_split"] = {
+            split: {
+                "success": [Example.from_dict(ex) for ex in by_split.get("success", [])],
+                "failures": [Example.from_dict(ex) for ex in by_split.get("failures", [])],
+            }
+            for split, by_split in raw_by_split.items()
         }
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         return cls(**data)

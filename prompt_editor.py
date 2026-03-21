@@ -4,6 +4,7 @@ from llm.llm_response_parser import MarkdownParser
 from llm.llm_response_parser import VariantParser
 from prompts.templates import Templates
 from data_structures import TextGradient, EditOperation, OperationType, PromptNode, OptimizationSource
+from diagnostics import is_enabled, prompt_id, preview_text
 from config import LOCAL_CANDIDATES_PER_ITERATION, MAX_PROMPTS_TO_COMBINE
 
 class PromptEditor:
@@ -14,6 +15,11 @@ class PromptEditor:
     def generate_variants(self, current_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode] = None) -> List[PromptNode]:
         """Генерация вариантов промпта на основе текстового градиента"""
         editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, LOCAL_CANDIDATES_PER_ITERATION)
+        if is_enabled():
+            print(
+                f"[diag] generate_variants: base_prompt_id={prompt_id(current_prompt)} "
+                f"gradient_priority={gradient.priority:.3f} suggestions={len(gradient.specific_suggestions)}"
+            )
         try:
             if editing_prompt in self._cache:
                 response_text = self._cache[editing_prompt]
@@ -21,6 +27,8 @@ class PromptEditor:
                 response_text = self.llm.invoke(prompt=editing_prompt)
                 self._cache[editing_prompt] = response_text
             variants = VariantParser.parse_variants(response_text, current_prompt, gradient, parent_node)
+            if is_enabled():
+                print(f"[diag] parsed variants count: {len(variants)}")
             return variants
         except Exception as e:
             print(f"Error generating variants: {e}")
@@ -95,6 +103,8 @@ class PromptEditor:
             raise ValueError("Need at least 2 prompts to combine")
         
         combining_prompt = Templates.build_combine_prompt(prompts, combination_strategy)
+        if is_enabled():
+            print(f"[diag] combine_prompts: strategy={combination_strategy} inputs={len(prompts)}")
         if variation_id is not None:
             combining_prompt = f"{combining_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         
@@ -209,6 +219,11 @@ class PromptEditor:
             return None
         best_prompts_texts = [node.prompt_text if isinstance(node, PromptNode) else str(node) for node in best_nodes]
         diversify_prompt = Templates.build_diversify_prompt(best_prompts_texts, strategy['action'])
+        if is_enabled():
+            print(
+                f"[diag] apply_diversify_strategy: best_prompts={len(best_prompts_texts)} "
+                f"action='{preview_text(strategy.get('action', ''), 200)}'"
+            )
         if variation_id is not None:
             diversify_prompt = f"{diversify_prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
         try:

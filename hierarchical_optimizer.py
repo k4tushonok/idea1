@@ -10,6 +10,7 @@ from prompt_editor import PromptEditor
 from local_optimizer import LocalOptimizer
 from global_optimizer import GlobalOptimizer
 from llm.llm_client import create_llm
+from diagnostics import is_enabled, prompt_id
 from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
@@ -43,7 +44,8 @@ class HierarchicalOptimizer:
         initial_node = self.scorer.evaluate_node(
             initial_node,
             validation_examples,
-            execute=True
+            execute=True,
+            split="validation",
         )
         
         initial_score = initial_node.metrics.composite_score()
@@ -84,6 +86,11 @@ class HierarchicalOptimizer:
             # Локальная оптимизация для каждого узла в популяции
             for i, node in enumerate(population, 1):
                 print(f"\n  Optimizing node {i}/{len(population)} (score: {node.metrics.composite_score():.3f})")
+                if is_enabled():
+                    print(
+                        f"[diag] population node: node_id={node.id} "
+                        f"prompt_id={prompt_id(node.prompt_text)} gen={node.generation}"
+                    )
                 
                 try:
                     improved_node = self.local_optimizer.optimize(
@@ -150,6 +157,11 @@ class HierarchicalOptimizer:
             
             print(f"\n  Generation best: {generation_best_score:.3f}")
             print(f"  Overall best: {best_score:.3f}")
+            if is_enabled():
+                print(
+                    f"[diag] generation best node: node_id={generation_best.id} "
+                    f"prompt_id={prompt_id(generation_best.prompt_text)}"
+                )
             
             # Проверяем улучшение
             improvement = generation_best_score - best_score

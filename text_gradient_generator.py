@@ -4,6 +4,7 @@ import random
 from llm.llm_client import BaseLLM
 from llm.llm_response_parser import GradientParser, ClusterParser
 from data_structures import Example, TextGradient, PromptNode
+from diagnostics import is_enabled, prompt_id, preview_text
 from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_ITERATION, MAX_SUCCESS_EXAMPLES, SUCCESS_EXAMPLE_LIMIT, DEFAULT_PRIORITY, CONTRASTIVAE_PRIORITY_BOOST, FAILURE_EXAMPLE_LIMIT, BATCH_SUCCESS_EXAMPLE_LIMIT
 
 class TextGradientGenerator:
@@ -17,6 +18,11 @@ class TextGradientGenerator:
             raise ValueError("Need at least one failure example to generate gradient")
 
         analysis_prompt = Templates.build_analysis_prompt(current_prompt, failure_examples, success_examples, context, LOCAL_MAX_EXAMPLES)
+        if is_enabled():
+            print(
+                f"[diag] generate_gradient: prompt_id={prompt_id(current_prompt)} "
+                f"failures={len(failure_examples)} successes={len(success_examples) if success_examples else 0}"
+            )
 
         try:
             if analysis_prompt in self._cache:
@@ -25,6 +31,12 @@ class TextGradientGenerator:
                 analysis_text = self.llm.invoke(prompt=analysis_prompt)
                 self._cache[analysis_prompt] = analysis_text
             gradient = GradientParser.parse_gradient_response(analysis_text, failure_examples, success_examples)
+            if is_enabled():
+                print(
+                    f"[diag] generate_gradient result: priority={gradient.priority:.3f} "
+                    f"suggestions={len(gradient.specific_suggestions)}"
+                )
+                print(f"[diag] gradient direction='{preview_text(gradient.suggested_direction, 220)}'")
             return gradient
         except Exception as e:
             print(f"Error generating gradient: {e}")
@@ -63,6 +75,11 @@ class TextGradientGenerator:
 
         gradients = []
         combined_prompt = Templates.build_gradients_batch_prompt(batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES)
+        if is_enabled():
+            print(
+                f"[diag] generate_gradients_batch: prompt_id={prompt_id(current_prompt)} "
+                f"clusters={cluster_names} batches={len(batches)}"
+            )
         
         try:
             if combined_prompt in self._cache:
@@ -70,7 +87,18 @@ class TextGradientGenerator:
             else:
                 response_text = self.llm.invoke(prompt=combined_prompt)
                 self._cache[combined_prompt] = response_text
-            gradients = GradientParser.parse_batch_response(response_text=response_text, batches=batches, cluster_names=cluster_names, success_examples=success_examples[:BATCH_SUCCESS_EXAMPLE_LIMIT] if success_examples else [])
+            gradients = GradientParser.parse_batch_response(
+                response_text=response_text,
+                batches=batches,
+                cluster_names=cluster_names,
+                success_examples=success_examples[:BATCH_SUCCESS_EXAMPLE_LIMIT] if success_examples else [],
+            )
+            if not gradients or len(gradients) != len(batches):
+                raise ValueError(
+                    f"Batch gradient parse mismatch: expected {len(batches)}, got {len(gradients)}"
+                )
+            if is_enabled():
+                print(f"[diag] batch gradients parsed successfully: {len(gradients)}")
         except Exception as e:
             print(f"Batch LLM call failed, falling back to per-gradient calls: {e}")
             for batch_index, batch_failures in enumerate(batches):
@@ -78,12 +106,16 @@ class TextGradientGenerator:
                 grad.metadata["batch_index"] = batch_index
                 grad.metadata["cluster"] = cluster_names[batch_index]
                 gradients.append(grad)
+            if is_enabled():
+                print(f"[diag] fallback per-gradient produced: {len(gradients)}")
 
         gradients.sort(key=lambda g: getattr(g, "priority", DEFAULT_PRIORITY), reverse=True)
         return gradients
     
     def generate_clustered_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example], context: Dict) -> List[TextGradient]:
         print("Clustering failures by error type...")
+        if is_enabled():
+            print(f"[diag] generate_clustered_gradients: total_failures={len(failure_examples)}")
         clusters = self.cluster_failure_types(failure_examples)
         gradients: List[TextGradient] = []
         
@@ -106,6 +138,11 @@ class TextGradientGenerator:
     def generate_contrastive_gradient(self, current_prompt: str, hard_negatives: List[Example], hard_positives: List[Example]) -> TextGradient:
         """Генерация градиента с использованием контрастных примеров"""
         analysis_prompt = Templates.build_contrastive_prompt(current_prompt, hard_negatives, hard_positives)
+        if is_enabled():
+            print(
+                f"[diag] generate_contrastive_gradient: prompt_id={prompt_id(current_prompt)} "
+                f"hard_negatives={len(hard_negatives)} hard_positives={len(hard_positives)}"
+            )
         
         try:
             if analysis_prompt in self._cache:
@@ -116,6 +153,11 @@ class TextGradientGenerator:
             gradient = GradientParser.parse_gradient_response(analysis_text, hard_negatives, hard_positives, batch_index=0, cluster_name="contrastive")
             gradient.priority = min(1.0, gradient.priority + CONTRASTIVAE_PRIORITY_BOOST)
             gradient.metadata["type"] = "contrastive"
+            if is_enabled():
+                print(
+                    f"[diag] contrastive gradient: boosted_priority={gradient.priority:.3f} "
+                    f"suggestions={len(gradient.specific_suggestions)}"
+                )
             return gradient
         except Exception as e:
             print(f"Error generating contrastive gradient: {e}")
@@ -133,6 +175,11 @@ class TextGradientGenerator:
             return {"all": failure_examples}
 
         clustering_prompt = Templates.build_clustering_prompt(failure_examples, max_count=LOCAL_MAX_EXAMPLES)
+        if is_enabled():
+            print(
+                f"[diag] cluster_failure_types: failures={len(failure_examples)} "
+                f"prompt_id={prompt_id(clustering_prompt)}"
+            )
         
         try:
             if clustering_prompt in self._cache:
@@ -140,7 +187,10 @@ class TextGradientGenerator:
             else:
                 response_text = self.llm.invoke(prompt=clustering_prompt)
                 self._cache[clustering_prompt] = response_text
-            return ClusterParser.parse_clusters(response_text, failure_examples)
+            clusters = ClusterParser.parse_clusters(response_text, failure_examples)
+            if is_enabled():
+                print(f"[diag] clusters parsed: {list(clusters.keys())}")
+            return clusters
         except Exception as e:
             print(f"Error clustering failures: {e}")
             return {"all": failure_examples}        

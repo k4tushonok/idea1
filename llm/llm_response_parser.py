@@ -22,7 +22,11 @@ PRIORITY_RE = re.compile(r"(?:priority|score)?\s*:?\s*([01](?:\.\d+)?)", re.IGNO
 CODE_FENCE_STRIP_RE = re.compile(r"^```.*?\n|\n```$", re.DOTALL)
 GRADIENT_SPLIT_RE = re.compile(r"(###\s*GRADIENT.*?)(?=###\s*GRADIENT|\Z)", re.DOTALL | re.IGNORECASE)
 VARIANT_SPLIT_RE = re.compile(r'VARIANT\s+\d+:', re.IGNORECASE)
-LEADING_META_PREFIX_RE = re.compile(r"^\s*(?:approach|strategy|variant|prompt)\s*(?:\d+)?\s*:\s*", re.IGNORECASE)
+LEADING_META_PREFIX_RE = re.compile(
+    r"^\s*(?:approach|strategy|variant|prompt|analysis|reasoning|notes?|response|final\s+answer|explanation)"
+    r"\s*(?:\d+)?\s*:\s*",
+    re.IGNORECASE,
+)
 
 class MarkdownParser:
     @staticmethod
@@ -46,12 +50,18 @@ class MarkdownParser:
         else:
             cleaned = MarkdownParser.strip_code_fences(cleaned)
 
-        for _ in range(2):
+        for _ in range(6):
             updated = LEADING_META_PREFIX_RE.sub("", cleaned, count=1).strip()
             if updated == cleaned:
                 break
             cleaned = updated
+        MarkdownParser.assert_no_meta_prefix(cleaned)
         return cleaned
+
+    @staticmethod
+    def assert_no_meta_prefix(text: str) -> None:
+        if LEADING_META_PREFIX_RE.match(text.strip()):
+            raise ValueError("Prompt text starts with forbidden meta prefix")
 
 class SectionParser:
     @staticmethod
@@ -107,6 +117,14 @@ class SectionParser:
 
 class VariantParser:
     @staticmethod
+    def split_variant_blocks(response_text: str) -> List[str]:
+        if VARIANT_SPLIT_RE.search(response_text):
+            parts = VARIANT_SPLIT_RE.split(response_text)
+            blocks = [b for b in parts[1:] if b and b.strip()]
+            return blocks
+        return [response_text] if response_text and response_text.strip() else []
+
+    @staticmethod
     def extract_prompt(block: str) -> Optional[str]:
         match = PROMPT_BLOCK_RE.search(block)
         if match:
@@ -139,8 +157,8 @@ class VariantParser:
     @staticmethod
     def parse_variants(response_text: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> List[PromptNode]:
         nodes: List[PromptNode] = []
-        variant_blocks = VARIANT_SPLIT_RE.split(response_text)
-        for block in variant_blocks[1:]:
+        variant_blocks = VariantParser.split_variant_blocks(response_text)
+        for block in variant_blocks:
             node = VariantParser.parse_single_variant(block, original_prompt, gradient, parent_node)
             if node:
                 nodes.append(node)
@@ -152,7 +170,10 @@ class VariantParser:
         new_prompt = VariantParser.extract_prompt(block)
         if not new_prompt:
             new_prompt = block
-        new_prompt = MarkdownParser.normalize_prompt_text(new_prompt)
+        try:
+            new_prompt = MarkdownParser.normalize_prompt_text(new_prompt)
+        except ValueError:
+            return None
         if len(new_prompt) < MIN_PROMPT_LENGTH:
             return None
 
@@ -264,14 +285,14 @@ class StrategyParser:
             return text
 
         strategies = []
-        strategy_blocks = re.split(r'STRATEGY\s+\d+:', response_text)
+        strategy_blocks = re.split(r'STRATEGY\s+\d+:', response_text, flags=re.IGNORECASE)
         
         for block in strategy_blocks[1:]:
             try:
-                type_match = re.search(r'TYPE:\s*(.+?)(?=DESCRIPTION:|$)', block, re.DOTALL)
-                desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL)
-                rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL)
-                action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL)
+                type_match = re.search(r'TYPE:\s*(.+?)(?=DESCRIPTION:|$)', block, re.DOTALL | re.IGNORECASE)
+                desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
+                rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
+                action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL | re.IGNORECASE)
 
                 if type_match and desc_match:
                     strategy = {

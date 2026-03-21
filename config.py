@@ -61,6 +61,7 @@ CACHE_TTL_SECONDS: int = 7 * 24 * 3600   # TTL для записей в кэше
 USE_LLM_CORRECTNESS_CHECK: bool = False  # Использовать LLM для проверки корректности (доп. запросы)
 USE_LLM_EDIT_DISTANCE: bool = False      # Использовать LLM для семантической дистанции (доп. запросы)
 LOCAL_SIMILARITY_THRESHOLD: float = 0.8  # Порог локальной семантической близости (0..1)
+ENABLE_DIAGNOSTIC_LOGS: bool = True      # Включить диагностическое логирование
 
 # Веса метрик для оценки промптов
 METRIC_WEIGHTS: Dict[str, float] = {

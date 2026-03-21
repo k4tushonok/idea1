@@ -10,6 +10,7 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 from llm.llm_response_parser import StrategyParser
+from diagnostics import is_enabled, prompt_id, preview_text
 from config import (TOP_BEST_NODES,
                     MAX_DISTANCE_PAIRS,
                     COMMON_WORDS_TOP_K,
@@ -60,6 +61,11 @@ class GlobalOptimizer:
         print("\n" + "=" * 60)
         print(f"GLOBAL OPTIMIZATION STEP | Generation {current_generation}")
         print("=" * 60)
+        if is_enabled():
+            print(
+                f"[diag] global optimize input: generation={current_generation} "
+                f"train_examples={len(train_examples)} validation_examples={len(validation_examples)}"
+            )
         
         start_time = time.time()
         
@@ -74,6 +80,8 @@ class GlobalOptimizer:
         print(f"Generated {len(strategies)} strategies")
         for i, strategy in enumerate(strategies, 1):
             print(f"  {i}. {strategy['type']}: {strategy['description'][:80]}...")
+            if is_enabled():
+                print(f"[diag]   strategy action: '{preview_text(strategy.get('action', ''), 220)}'")
         
         # Шаг 3: Применение стратегий и создание кандидатов
         print("\nStep 3: Creating global candidates...")
@@ -249,6 +257,8 @@ class GlobalOptimizer:
                 self._cache[strategy_prompt] = response_text
 
             strategies = StrategyParser.parse_strategies(response_text)
+            if is_enabled():
+                print(f"[diag] parsed strategies count: {len(strategies)}")
             return strategies
         except Exception as e:
             print(f"Error generating strategies: {e}")
@@ -268,17 +278,32 @@ class GlobalOptimizer:
 
                 node = handler(strategy_payload, history_analysis, current_generation, variation_id=variation_id)
                 if not node:
+                    if is_enabled():
+                        print(f"[diag] strategy {strategy['type']} produced no node")
                     continue
 
                 # Фильтрация дубликатов по схожести
-                is_duplicate = any(
-                    1.0 - self.scorer.calculate_edit_distance(node.prompt_text, c.prompt_text) > SIMILARITY_THRESHOLD
-                    for c in candidates
-                )
+                is_duplicate = False
+                for c in candidates:
+                    similarity = 1.0 - self.scorer.calculate_edit_distance(node.prompt_text, c.prompt_text)
+                    if similarity > SIMILARITY_THRESHOLD:
+                        is_duplicate = True
+                        if is_enabled():
+                            print(
+                                f"[diag] duplicate global candidate skipped: "
+                                f"new_prompt_id={prompt_id(node.prompt_text)} existing_prompt_id={prompt_id(c.prompt_text)} "
+                                f"similarity={similarity:.3f}"
+                            )
+                        break
                 if is_duplicate:
                     continue
 
                 candidates.append(node)
+                if is_enabled():
+                    print(
+                        f"[diag] global candidate accepted: node_id={node.id} "
+                        f"strategy={strategy['type']} prompt_id={prompt_id(node.prompt_text)} len={len(node.prompt_text)}"
+                    )
                 self.applied_strategies.append(
                     {"generation": current_generation, "strategy": strategy_payload, "candidate_id": node.id}
                 )
@@ -290,7 +315,7 @@ class GlobalOptimizer:
         for i, candidate in enumerate(candidates, 1):
             print(f"  Evaluating global candidate {i}/{len(candidates)}...", end=" ")
             try:
-                candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True)
+                candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation")
                 score = candidate.metrics.composite_score()
                 print(f"Score: {score:.3f}")
                 self.history.add_node(candidate)

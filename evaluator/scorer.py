@@ -3,6 +3,7 @@ from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, Sa
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
+from diagnostics import is_enabled, print_metrics, print_prompt
 from functools import lru_cache
 import random
 from tqdm import tqdm
@@ -58,8 +59,8 @@ class PromptScorer:
                     for ex, out in zip(batch, parsed):
                         ex.actual_output = out
                     continue
-            except Exception:
-                print("Batch execution failed, falling back to single execution")
+            except Exception as e:
+                print(f"Batch execution failed, falling back to single execution: {e}")
                 pass
 
             if progress_bar:
@@ -67,8 +68,8 @@ class PromptScorer:
                     print(f"Falling back to single execution for example {i+1}/{len(batch)}")
                     ex.actual_output = self.execute_prompt(prompt, ex.input_text)
             else:
+                print(f"Falling back to single execution for {len(batch)} examples")
                 for ex in batch:
-                    print("Falling back to single execution for one example")
                     ex.actual_output = self.execute_prompt(prompt, ex.input_text)
 
         return examples
@@ -89,17 +90,31 @@ class PromptScorer:
             start = response_text.find("[")
             end = response_text.rfind("]") + 1
             if start == -1 or end == -1:
+                if is_enabled():
+                    print("[diag] batch parse failed: JSON array delimiters not found")
                 return None
             arr_text = response_text[start:end]
             arr = json.loads(arr_text)
+            if len(arr) != n_expected:
+                if is_enabled():
+                    print(f"[diag] batch parse mismatch: expected={n_expected} got={len(arr)}")
+                return None
             outputs = [None] * len(arr)
             for item in arr:
                 idx = int(item.get("index")) if item.get("index") is not None else None
                 out = item.get("output") if item.get("output") is not None else ""
                 if idx is None:
+                    if is_enabled():
+                        print("[diag] batch parse failed: missing index field")
+                    return None
+                if idx < 0 or idx >= len(outputs):
+                    if is_enabled():
+                        print(f"[diag] batch parse failed: out-of-range index={idx}")
                     return None
                 outputs[idx] = out
             if any(o is None for o in outputs):
+                if is_enabled():
+                    print("[diag] batch parse failed: gaps in output indices")
                 return None
             return outputs
         except Exception:
@@ -115,6 +130,8 @@ class PromptScorer:
                         examples: List[Example],
                         execute: bool = True,
                         sample: bool = True) -> Metrics:
+        if is_enabled():
+            print(f"[diag] evaluate_prompt: execute={execute} sample={sample} incoming_examples={len(examples)}")
         if sample:
             eval_examples = self._sample_examples(examples)
         else:
@@ -140,11 +157,19 @@ class PromptScorer:
             for name, metric in self.metrics.items():
                 score = metric.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
                 metrics.metrics[name] = float(score)
+        if is_enabled():
+            print_metrics("evaluate_prompt", metrics)
 
         return metrics
 
-    def evaluate_node(self, node: PromptNode, test_examples: List[Example], execute: bool = True) -> PromptNode:
+    def evaluate_node(self, node: PromptNode, test_examples: List[Example], execute: bool = True, split: str = "validation") -> PromptNode:
         """Оценка узла промпта, сохраняет метрики и примеры успеха/неудачи"""
+        if is_enabled():
+            print_prompt("Prompt", node.prompt_text)
+            print(
+                f"[diag] evaluate_node: node_id={node.id} gen={node.generation} "
+                f"source={node.source.value} split={split} examples={len(test_examples)}"
+            )
         metrics = self.evaluate_prompt(node.prompt_text, test_examples, execute=execute)
         node.metrics = metrics
         node.is_evaluated = True
@@ -160,6 +185,9 @@ class PromptScorer:
                 failures.append(ex)
 
         node.evaluation_examples = { "success": successes, "failures": failures }
+        node.evaluation_examples_by_split[split] = { "success": successes, "failures": failures }
+        if is_enabled():
+            print(f"[diag] evaluate_node results: success={len(successes)} failures={len(failures)}")
         return node
     
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
