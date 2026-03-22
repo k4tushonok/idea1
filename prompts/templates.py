@@ -210,6 +210,7 @@ class Templates:
         template = Templates.load_template("editing")
         return template.format(
             current_prompt=current_prompt,
+            failures_block=failures,           
             error_analysis=gradient.error_analysis,
             suggested_direction=gradient.suggested_direction,
             specific_suggestions_block=suggestions,

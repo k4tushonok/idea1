@@ -93,6 +93,8 @@ class HierarchicalOptimizer:
                     )
                 
                 try:
+                    self.local_optimizer._evaluated_prompts.clear()
+                    
                     improved_node = self.local_optimizer.optimize(
                         starting_node=node,
                         train_examples=train_examples,
@@ -117,13 +119,18 @@ class HierarchicalOptimizer:
                         validation_examples=validation_examples
                     )
                     
-                    # Локальная оптимизация для каждого глобального кандидата
-                    print(f"\nRefining {len(global_candidates)} global candidates with local optimization...")
+                    # Сортируем и берём только топ-2
+                    global_candidates_sorted = sorted(global_candidates, key=lambda n: n.metrics.composite_score(), reverse=True)
+                    top_global = global_candidates_sorted[:2]
                     
-                    for i, global_candidate in enumerate(global_candidates, 1):
-                        print(f"\n  Refining global candidate {i}/{len(global_candidates)}")
-                        
+                    # Локальная оптимизация для каждого глобального кандидата
+                    print(f"\nRefining {len(top_global)} global candidates with local optimization...")
+                    
+                    for i, global_candidate in enumerate(top_global, 1):
+                        print(f"\n  Refining global candidate {i}/{len(top_global)}")
                         try:
+                            self.local_optimizer._evaluated_prompts.clear()
+
                             refined = self.local_optimizer.optimize(
                                 starting_node=global_candidate,
                                 train_examples=train_examples,

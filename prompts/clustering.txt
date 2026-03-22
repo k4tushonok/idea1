@@ -1,9 +1,17 @@
-Group these failures into 3-5 categories based on the type of error. For each category, provide:
-- Category name (e.g., "missing_context", "incorrect_format", "logic_error")
-- Brief description
+Group these failures into 3-5 categories based on the ROOT CAUSE of the error.
+
+Focus on WHY the prompt failed, not just what type of answer was wrong.
+Use specific descriptive names that explain the cause, for example:
+- Instead of "Incorrect Answer" → "model_answers_when_context_has_no_answer"
+- Instead of "Missing Answer" → "model_returns_no_answer_when_answer_exists"
+- Instead of "Incorrect Format" → "model_adds_explanation_instead_of_short_answer"
+
+For each category, provide:
+- Category name (specific and descriptive)
+- Brief description of the root cause
 - List of example numbers that belong to this category
 
 FORMAT:
-CATEGORY: [name]
-DESCRIPTION: [description]
+CATEGORY: [specific_descriptive_name]
+DESCRIPTION: [what exactly went wrong and why]
 EXAMPLES: [comma-separated numbers]

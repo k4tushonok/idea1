@@ -33,11 +33,10 @@ class PromptScorer:
             print("Failed to apply LLM invoke caching")
             pass
         
-    def _sample_examples(self, examples: List[Example]) -> List[Example]:
+    def _sample_examples(self, examples: List[Example], seed_offset: int = 0) -> List[Example]:
         if len(examples) <= self.max_examples_per_node:
             return examples
-
-        rnd = random.Random(self.seed)
+        rnd = random.Random(self.seed + seed_offset)
         return rnd.sample(examples, self.max_examples_per_node)
     
     def execute_prompt_batch(self, prompt: str, examples: List[Example], progress_bar: bool = False) -> List[Example]:
@@ -126,14 +125,13 @@ class PromptScorer:
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
         return self.llm.invoke(prompt=full_prompt)
 
-    def evaluate_prompt(self, prompt: str,
-                        examples: List[Example],
-                        execute: bool = True,
-                        sample: bool = True) -> Metrics:
+    def evaluate_prompt(self, prompt: str, examples: List[Example],
+                    execute: bool = True, sample: bool = True,
+                    seed_offset: int = 0) -> Metrics:
         if is_enabled():
             print(f"[diag] evaluate_prompt: execute={execute} sample={sample} incoming_examples={len(examples)}")
         if sample:
-            eval_examples = self._sample_examples(examples)
+            eval_examples = self._sample_examples(examples, seed_offset)
         else:
             eval_examples = examples
         
@@ -162,15 +160,16 @@ class PromptScorer:
 
         return metrics
 
-    def evaluate_node(self, node: PromptNode, test_examples: List[Example], execute: bool = True, split: str = "validation") -> PromptNode:
+    def evaluate_node(self, node: PromptNode, test_examples: List[Example], execute: bool = True, split: str = "validation", seed_offset=0) -> PromptNode:
         """Оценка узла промпта, сохраняет метрики и примеры успеха/неудачи"""
         if is_enabled():
             print_prompt("Prompt", node.prompt_text)
             print(
                 f"[diag] evaluate_node: node_id={node.id} gen={node.generation} "
-                f"source={node.source.value} split={split} examples={len(test_examples)}"
+                f"source={node.source.value} split={split} examples={len(test_examples)} "
+                f"seed_offset={seed_offset}"
             )
-        metrics = self.evaluate_prompt(node.prompt_text, test_examples, execute=execute)
+        metrics = self.evaluate_prompt(node.prompt_text, test_examples, execute=execute, seed_offset=seed_offset)
         node.metrics = metrics
         node.is_evaluated = True
 
@@ -284,11 +283,14 @@ Return JSON only.
         for ex in examples:
             if ex.actual_output is None:
                 continue
+            if "accuracy" in per_metric:
+                correct = ex.is_correct() or ex.is_correct_by_llm(self.llm)
+                per_metric["accuracy"].append(1.0 if correct else 0.0)
             try:
-                if ex.expected_output is not None and ex.expected_output.strip() and \
-                   ex.expected_output.strip().lower() == ex.actual_output.strip().lower():
+                if ex.expected_output is not None and ex.expected_output.strip() and ex.expected_output.strip().lower() == ex.actual_output.strip().lower():
                     for name in per_metric.keys():
-                        per_metric[name].append(1.0)
+                        if name != "accuracy":
+                            per_metric[name].append(1.0)
                     continue
             except Exception:
                 pass
@@ -301,7 +303,8 @@ Return JSON only.
             raw = self.llm.invoke(prompt=judge_prompt)
             parsed = self._parse_combined_judge_output(raw)
             for name, value in parsed.items():
-                per_metric[name].append(value)
+                if name != "accuracy":
+                    per_metric[name].append(value)
 
         return {
             name: (sum(vals) / len(vals) if vals else 0.0)

@@ -111,6 +111,18 @@ class AccuracyMetric(LLMJudgeMetric):
     name = "accuracy"
     binary = True
 
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            correct = ex.is_correct() or ex.is_correct_by_llm(llm)
+            scores.append(1.0 if correct else 0.0)
+        return sum(scores) / len(scores)
+    
     def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
         return f"""
             You are an impartial judge evaluating the correctness of a model response.

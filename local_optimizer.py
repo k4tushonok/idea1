@@ -29,7 +29,12 @@ class LocalOptimizer:
         print(f"\n{'='*60}")
         print(f"Starting Local Optimization")
         print(f"{'='*60}\n")
-        
+
+        # Делим validation: 70% для оценки кандидатов, 30% holdout для подтверждения
+        split = int(len(validation_examples) * 0.7)
+        eval_examples = validation_examples[:split]
+        holdout_examples = validation_examples[split:]
+
         # Добавляем начальный узел в историю, если его там нет
         if not self.history.get_node(starting_node.id):
             self.history.add_node(starting_node)
@@ -37,7 +42,7 @@ class LocalOptimizer:
         # Оцениваем начальный узел, если не оценен
         if not starting_node.is_evaluated:
             print(f"Evaluating starting node...")
-            starting_node = self.scorer.evaluate_node(starting_node, validation_examples, execute=True, split="validation")
+            starting_node = self.scorer.evaluate_node(starting_node, eval_examples, execute=True, split="validation")
             self.history.update_node(starting_node.id, starting_node)
             print(f"Starting score: {starting_node.metrics.composite_score():.3f}")
         
@@ -45,6 +50,7 @@ class LocalOptimizer:
         current_best = starting_node
         best_score = current_best.metrics.composite_score()
         no_improve_iters = 0
+        prev_real_rate = 1.0
         
         # Основной цикл оптимизации
         for iteration in range(LOCAL_ITERATIONS_PER_GENERATION):
@@ -57,76 +63,76 @@ class LocalOptimizer:
                     f"[diag] local iteration state: current_best_id={current_best.id} "
                     f"prompt_id={prompt_id(current_best.prompt_text)} score={best_score:.3f}"
                 )
-            
-            # Шаг 1: Получаем провалы текущего лучшего промпта
-            failure_examples, success_examples = self._get_train_examples_outcomes(current_best, train_examples)
+
+            # Шаг 1: Получаем провалы
+            failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(current_best, train_examples)
             if is_enabled():
                 print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
+
             if not failure_examples:
                 print("No failures found - prompt is perfect on training set!")
-                # Все еще выполняем валидацию на validation_examples
-                if validation_examples:
+                if holdout_examples:
                     print(f"\nValidation Set Evaluation:")
                     test_metrics = self.scorer.evaluate_prompt(
-                        current_best.prompt_text,
-                        validation_examples,
-                        execute=True,
-                        sample=False,
-                    )
+                        current_best.prompt_text, holdout_examples, execute=True, sample=False)
                     print(f"  Validation score: {test_metrics.composite_score():.3f}")
                     print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
                     print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
                 break
-            # print(f"Failures: {len(failure_examples)}, Successes: {len(success_examples)}")
-            
-            # Шаг 2: Генерируем текстовые градиенты
+
+            # Шаг 2: Генерируем градиенты
             gradients = self._generate_gradients(current_best, failure_examples, success_examples)
             print(f"Generated {len(gradients)} gradients")
-            
-            # Шаг 3: Создаем варианты на основе градиентов
+
+            # Шаг 3: Создаём варианты
             candidates = self._generate_candidates(current_best, gradients)
             print(f"Generated {len(candidates)} candidate prompts")
-            
-            # Шаг 4: Оцениваем кандидатов
-            evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
+
+            # Шаг 4: Оцениваем кандидатов на eval_examples (70%)
+            evaluated_candidates = self._evaluate_candidates(candidates, eval_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
-            
-            # Шаг 5: Выбираем лучшего кандидата
+
+            # Шаг 5: Выбираем лучшего
             best_candidate = self._select_best_candidate(evaluated_candidates)
             if best_candidate:
                 candidate_score = best_candidate.metrics.composite_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
-                
-                # Проверяем, есть ли улучшение
-                if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
-                    print(f"✓ Improvement found! New best: {candidate_score:.3f}")
-                    current_best = best_candidate
-                    best_score = candidate_score
-                    no_improve_iters = 0
-                    self.improvements_count += 1
 
-                    if validation_examples:
+                if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
+                    # Подтверждаем улучшение на holdout (30%)
+                    holdout_metrics = self.scorer.evaluate_prompt(best_candidate.prompt_text, holdout_examples, execute=True, sample=False)
+                    holdout_score = holdout_metrics.composite_score()
+
+                    if holdout_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
+                        print(f"✓ Improvement found! New best: {candidate_score:.3f} (holdout: {holdout_score:.3f})")
+                        current_best = best_candidate
+                        best_score = holdout_score  # обновляем по holdout
+                        no_improve_iters = 0
+                        self.improvements_count += 1
+
                         print(f"\nValidation Set Evaluation:")
-                        test_metrics = self.scorer.evaluate_prompt(
-                            current_best.prompt_text,
-                            validation_examples,
-                            execute=True,
-                            sample=False,
-                        )
-                        print(f"  Validation score: {test_metrics.composite_score():.3f}")
-                        print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
-                        print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
-                        print(f"  Validation robustness: {test_metrics.metrics['robustness']:.3f}")
-                        print(f"  Validation efficiency: {test_metrics.metrics['efficiency']:.3f}")
-                        print(f"  Validation safety: {test_metrics.metrics['safety']:.3f}")
+                        print(f"  Validation score: {holdout_score:.3f}")
+                        print(f"  Validation accuracy: {holdout_metrics.metrics['accuracy']:.3f}")
+                        print(f"  Validation f1: {holdout_metrics.metrics['f1']:.3f}")
+                        print(f"  Validation robustness: {holdout_metrics.metrics['robustness']:.3f}")
+                        print(f"  Validation efficiency: {holdout_metrics.metrics['efficiency']:.3f}")
+                        print(f"  Validation safety: {holdout_metrics.metrics['safety']:.3f}")
+                    else:
+                        print(f"✗ Improvement not confirmed on holdout: {holdout_score:.3f}")
+                        no_improve_iters += 1
                 else:
                     print(f"✗ No significant improvement")
                     no_improve_iters += 1
             else:
                 print("✗ No valid candidates generated")
                 no_improve_iters += 1
-            
+
+            # Early stopping по failure rate
+            if real_rate >= prev_real_rate - 0.01:
+                no_improve_iters += 1
+            prev_real_rate = real_rate
+
             iteration_time = time.time() - iteration_start_time
             calls_after = getattr(self.scorer.llm, 'total_api_calls', 0)
             calls_delta = calls_after - calls_before
@@ -153,8 +159,8 @@ class LocalOptimizer:
         
         return current_best
     
-    def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example]]:
-        """Всегда вычисляет train-failures/train-successes из train split."""
+    def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example], float]:
+        """Вычисляет train-failures/successes, возвращает реальный failure rate до обрезки."""
         print(f"Executing prompt on {len(examples)} examples to find failures...")
         eval_examples = [
             Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata))
@@ -170,15 +176,22 @@ class LocalOptimizer:
             else:
                 failures.append(ex)
 
-        # Ограничиваем размер батча провалов для генерации градиентов
-        if len(failures) > LOCAL_BATCH_SIZE:
-            failures = random.sample(failures, LOCAL_BATCH_SIZE)
+        real_rate = len(failures) / max(len(executed_examples), 1)
+        print(f"Train failures: {len(failures)}/{len(executed_examples)} ({real_rate:.1%})")
+
+        failures_for_gradient = (
+            random.sample(failures, LOCAL_BATCH_SIZE)
+            if len(failures) > LOCAL_BATCH_SIZE
+            else failures
+        )
+
         if is_enabled():
             print(
-                f"[diag] train outcomes after cap: failures={len(failures)} successes={len(successes)} "
-                f"failure_rate={(len(failures) / max(len(executed_examples), 1)):.3f}"
+                f"[diag] train outcomes after cap: failures={len(failures_for_gradient)} "
+                f"successes={len(successes)} failure_rate={real_rate:.3f}"
             )
-        return failures, successes
+
+        return failures_for_gradient, successes, real_rate
     
     def _generate_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example]) -> List[TextGradient]:
         """Генерация текстовых градиентов на основе провалов и успехов"""
@@ -269,7 +282,8 @@ class LocalOptimizer:
                     f"\n[diag] candidate details: node_id={candidate.id} "
                     f"prompt_id={prompt_id(candidate.prompt_text)} len={len(candidate.prompt_text)}"
                 )
-            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation")
+
+            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation", seed_offset=i)
             score = candidate.metrics.composite_score()
             print(f"Score: {score:.3f}")
                 

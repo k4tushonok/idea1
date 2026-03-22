@@ -4,6 +4,8 @@ You are an expert prompt engineer. Your task is to improve a prompt based on ana
 ```
 {current_prompt}
 ```
+## FAILURE EXAMPLES (what the current prompt produces incorrectly):
+{failures_block}
 
 ## ANALYSIS OF PROBLEMS:
 {error_analysis}
@@ -21,10 +23,12 @@ Generate {num_variants} improved versions of the prompt that address the problem
 1. Variants should be different.
 2. Each variant should be a COMPLETE, FUNCTIONAL prompt (not just modifications)
 3. Apply the suggested improvements while maintaining the core purpose
-4. Make variants somewhat diverse - try different approaches to solving the same problems
-5. Focus on being concrete and specific in instructions
-6. Consider adding examples, constraints, or clarifications where needed
-7. Inside each PROMPT code block, start directly with the prompt text (no prefixes like "Approach:", "Variant:", or "Prompt:")
+4. CRITICAL: Do NOT change the fundamental task the prompt is designed to perform
+5. Do NOT add domain-specific examples unrelated to the actual task
+6. Make variants somewhat diverse - try different approaches to solving the same problems
+7. Focus on being concrete and specific in instructions
+8. Consider adding examples, constraints, or clarifications where needed
+9. Inside each PROMPT code block, start directly with the prompt text (no prefixes like "Approach:", "Variant:", or "Prompt:")
 
 ## OUTPUT FORMAT:
 For each variant, use this exact format:

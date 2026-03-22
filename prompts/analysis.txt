@@ -5,9 +5,6 @@ CURRENT PROMPT:
 {current_prompt}
 ```
 
-TASK:
-Analyze the failures below and provide actionable recommendations for improving the prompt.
-
 FAILURE EXAMPLES (where the prompt produced incorrect outputs):
 
 {failure_examples_block}
@@ -28,13 +25,13 @@ Describe what specifically is going wrong with the current prompt. Be concrete a
 - Are there any ambiguities or unclear instructions?
 
 ## SUGGESTED DIRECTION
-Describe the semantic direction in which the prompt should be modified.
-- What concepts or constraints should be added?
-- What aspects need clarification or emphasis?
-- What examples or patterns should be incorporated?
+Describe specific changes to the PROMPT TEXT:
+- What exact words or phrases should be added or removed?
+- What wording could replace ambiguous parts?
+- Do NOT suggest training the model — only suggest prompt text changes
 
 ## SPECIFIC SUGGESTIONS
-Provide 3-5 concrete, actionable suggestions for modifying the prompt:
+Provide 3-5 concrete, actionable suggestions for modifying the prompt text:
 1. [First specific suggestion]
 2. [Second specific suggestion]
 3. [Third specific suggestion]
