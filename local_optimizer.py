@@ -29,12 +29,7 @@ class LocalOptimizer:
         print(f"\n{'='*60}")
         print(f"Starting Local Optimization")
         print(f"{'='*60}\n")
-
-        # Делим validation: 70% для оценки кандидатов, 30% holdout для подтверждения
-        split = int(len(validation_examples) * 0.7)
-        eval_examples = validation_examples[:split]
-        holdout_examples = validation_examples[split:]
-
+        
         # Добавляем начальный узел в историю, если его там нет
         if not self.history.get_node(starting_node.id):
             self.history.add_node(starting_node)
@@ -42,7 +37,7 @@ class LocalOptimizer:
         # Оцениваем начальный узел, если не оценен
         if not starting_node.is_evaluated:
             print(f"Evaluating starting node...")
-            starting_node = self.scorer.evaluate_node(starting_node, eval_examples, execute=True, split="validation")
+            starting_node = self.scorer.evaluate_node(starting_node, validation_examples, execute=True, split="validation")
             self.history.update_node(starting_node.id, starting_node)
             print(f"Starting score: {starting_node.metrics.composite_score():.3f}")
         
@@ -63,64 +58,68 @@ class LocalOptimizer:
                     f"[diag] local iteration state: current_best_id={current_best.id} "
                     f"prompt_id={prompt_id(current_best.prompt_text)} score={best_score:.3f}"
                 )
-
-            # Шаг 1: Получаем провалы
+            
+            # Шаг 1: Получаем провалы текущего лучшего промпта
             failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(current_best, train_examples)
             if is_enabled():
                 print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
-
             if not failure_examples:
                 print("No failures found - prompt is perfect on training set!")
-                if holdout_examples:
+                # Все еще выполняем валидацию на validation_examples
+                if validation_examples:
                     print(f"\nValidation Set Evaluation:")
                     test_metrics = self.scorer.evaluate_prompt(
-                        current_best.prompt_text, holdout_examples, execute=True, sample=False)
+                        current_best.prompt_text,
+                        validation_examples,
+                        execute=True,
+                        sample=False,
+                    )
                     print(f"  Validation score: {test_metrics.composite_score():.3f}")
                     print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
                     print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
                 break
-
-            # Шаг 2: Генерируем градиенты
+            
+            # Шаг 2: Генерируем текстовые градиенты
             gradients = self._generate_gradients(current_best, failure_examples, success_examples)
             print(f"Generated {len(gradients)} gradients")
-
-            # Шаг 3: Создаём варианты
+            
+            # Шаг 3: Создаем варианты на основе градиентов
             candidates = self._generate_candidates(current_best, gradients)
             print(f"Generated {len(candidates)} candidate prompts")
-
-            # Шаг 4: Оцениваем кандидатов на eval_examples (70%)
-            evaluated_candidates = self._evaluate_candidates(candidates, eval_examples)
+            
+            # Шаг 4: Оцениваем кандидатов
+            evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
-
-            # Шаг 5: Выбираем лучшего
+            
+            # Шаг 5: Выбираем лучшего кандидата
             best_candidate = self._select_best_candidate(evaluated_candidates)
             if best_candidate:
                 candidate_score = best_candidate.metrics.composite_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
-
+                
+                # Проверяем, есть ли улучшение
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
-                    # Подтверждаем улучшение на holdout (30%)
-                    holdout_metrics = self.scorer.evaluate_prompt(best_candidate.prompt_text, holdout_examples, execute=True, sample=False)
-                    holdout_score = holdout_metrics.composite_score()
+                    print(f"✓ Improvement found! New best: {candidate_score:.3f}")
+                    current_best = best_candidate
+                    best_score = candidate_score
+                    no_improve_iters = 0
+                    self.improvements_count += 1
 
-                    if holdout_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
-                        print(f"✓ Improvement found! New best: {candidate_score:.3f} (holdout: {holdout_score:.3f})")
-                        current_best = best_candidate
-                        best_score = holdout_score  # обновляем по holdout
-                        no_improve_iters = 0
-                        self.improvements_count += 1
-
+                    if validation_examples:
                         print(f"\nValidation Set Evaluation:")
-                        print(f"  Validation score: {holdout_score:.3f}")
-                        print(f"  Validation accuracy: {holdout_metrics.metrics['accuracy']:.3f}")
-                        print(f"  Validation f1: {holdout_metrics.metrics['f1']:.3f}")
-                        print(f"  Validation robustness: {holdout_metrics.metrics['robustness']:.3f}")
-                        print(f"  Validation efficiency: {holdout_metrics.metrics['efficiency']:.3f}")
-                        print(f"  Validation safety: {holdout_metrics.metrics['safety']:.3f}")
-                    else:
-                        print(f"✗ Improvement not confirmed on holdout: {holdout_score:.3f}")
-                        no_improve_iters += 1
+                        test_metrics = self.scorer.evaluate_prompt(
+                            current_best.prompt_text,
+                            validation_examples,
+                            execute=True,
+                            sample=False,
+                        )
+                        print(f"  Validation score: {test_metrics.composite_score():.3f}")
+                        print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
+                        print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
+                        print(f"  Validation robustness: {test_metrics.metrics['robustness']:.3f}")
+                        print(f"  Validation efficiency: {test_metrics.metrics['efficiency']:.3f}")
+                        print(f"  Validation safety: {test_metrics.metrics['safety']:.3f}")
                 else:
                     print(f"✗ No significant improvement")
                     no_improve_iters += 1
