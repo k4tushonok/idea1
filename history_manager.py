@@ -12,6 +12,7 @@ class HistoryManager:
         self.nodes: Dict[str, PromptNode] = {}                                        # Основное хранилище: id -> PromptNode
         self.nodes_by_generation: Dict[int, List[str]] = defaultdict(list)            # Индекс по поколениям
         self.nodes_by_source: Dict[OptimizationSource, List[str]] = defaultdict(list) # Индекс по источникам
+        self.nodes_by_prompt_text: Dict[str, List[str]] = defaultdict(list)           # Индекс по точному тексту промпта
         self.root_ids: List[str] = []                                                 # Корневые узлы (начальные промпты)
         self.total_evaluations = 0                                                    # Общее число оцененных узлов
         self.creation_time = datetime.now()                                           # Время создания истории
@@ -23,6 +24,7 @@ class HistoryManager:
         # Обновляем индексы
         self.nodes_by_generation[node.generation].append(node.id)
         self.nodes_by_source[node.source].append(node.id)
+        self.nodes_by_prompt_text[node.prompt_text].append(node.id)
         
         # Если нет родителя - это корень
         if node.parent_id is None:
@@ -60,9 +62,24 @@ class HistoryManager:
             if node_id in self.nodes_by_source[old_node.source]:
                 self.nodes_by_source[old_node.source].remove(node_id)
             self.nodes_by_source[node.source].append(node_id)
+        if old_node.prompt_text != node.prompt_text:
+            if node_id in self.nodes_by_prompt_text[old_node.prompt_text]:
+                self.nodes_by_prompt_text[old_node.prompt_text].remove(node_id)
+            self.nodes_by_prompt_text[node.prompt_text].append(node_id)
         # Скорректировать total_evaluations
         if not old_node.is_evaluated and node.is_evaluated:
             self.total_evaluations += 1
+
+    def find_node_by_prompt_text(self, prompt_text: str, evaluated_only: bool = True) -> Optional[PromptNode]:
+        """Поиск узла по точному совпадению текста промпта."""
+        for node_id in self.nodes_by_prompt_text.get(prompt_text, []):
+            node = self.nodes.get(node_id)
+            if node is None:
+                continue
+            if evaluated_only and not node.is_evaluated:
+                continue
+            return node
+        return None
     
     def get_lineage(self, node_id: str) -> List[PromptNode]:
         """Получение полной родословной узла (от корня до узла)"""
@@ -102,13 +119,16 @@ class HistoryManager:
             return []
         
         # Сортируем
-        candidates.sort(key=lambda n: n.metrics.composite_score(), reverse=True)
+        candidates.sort(key=lambda n: n.selection_score(), reverse=True)
         
         return candidates[:top_k]
     
     def get_pareto_front(self) -> List[PromptNode]:
         """Определение Pareto-front"""
         nodes = self.get_evaluated_nodes()
+        
+        nodes = [n for n in nodes if n.selection_accuracy() >= 0.1]
+    
         if len(nodes) <= 1:
             return nodes
         
@@ -159,7 +179,7 @@ class HistoryManager:
                 continue
             
             # Проверяем, есть ли улучшение
-            improvement = (node.metrics.composite_score() - parent.metrics.composite_score())
+            improvement = (node.selection_score() - parent.selection_score())
             
             if improvement >= MIN_IMPROVEMENT:
                 # Считаем операции, приведшие к улучшению
@@ -181,7 +201,7 @@ class HistoryManager:
             gen_nodes = self.get_nodes_by_generation(gen)
             evaluated = [n for n in gen_nodes if n.is_evaluated]
             if evaluated:
-                best_score = max(n.metrics.composite_score() for n in evaluated)
+                best_score = max(n.selection_score() for n in evaluated)
                 recent_best_scores.append(best_score)
         
         if len(recent_best_scores) < 2:
@@ -236,7 +256,7 @@ class HistoryManager:
             "best_nodes": [
                 {
                     "id": node.id,
-                    "score": node.metrics.composite_score(),
+                    "score": node.selection_score(),
                     "generation": node.generation,
                     "source": node.source.value,
                     "prompt_preview": node.prompt_text[:100] + "..."
@@ -278,8 +298,8 @@ class HistoryManager:
             "root_nodes": len(self.root_ids),
             "generations": len(self.nodes_by_generation),
             "max_generation": max(self.nodes_by_generation.keys()) if self.nodes_by_generation else 0,
-            "best_score": max(n.metrics.composite_score() for n in evaluated) if evaluated else 0.0,
-            "avg_score": np.mean([n.metrics.composite_score() for n in evaluated]) if evaluated else 0.0,
+            "best_score": max(n.selection_score() for n in evaluated) if evaluated else 0.0,
+            "avg_score": np.mean([n.selection_score() for n in evaluated]) if evaluated else 0.0,
             "total_evaluations": self.total_evaluations
         }
     

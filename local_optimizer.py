@@ -1,4 +1,5 @@
 from typing import List, Dict, Optional, Set, Tuple
+from copy import deepcopy
 import time
 import random
 from data_structures import Example, PromptNode, TextGradient
@@ -43,7 +44,8 @@ class LocalOptimizer:
         
         # Текущий лучший узел
         current_best = starting_node
-        best_score = current_best.metrics.composite_score()
+        best_score = current_best.selection_score()
+        best_accuracy = current_best.selection_accuracy()
         no_improve_iters = 0
         prev_real_rate = 1.0
         
@@ -90,36 +92,44 @@ class LocalOptimizer:
             # Шаг 4: Оцениваем кандидатов
             evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
+
+            # Pre-gate should compare sampled metrics to sampled metrics.
+            # Full-validation metrics are used later only for confirmation.
+            baseline_accuracy = current_best.metrics.metrics.get("accuracy", 0.0)
+            eligible_candidates = [
+                candidate for candidate in evaluated_candidates
+                if candidate.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
+            ]
+            if len(eligible_candidates) != len(evaluated_candidates):
+                print(
+                    f"Filtered out {len(evaluated_candidates) - len(eligible_candidates)} candidates "
+                    f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
+                )
             
             # Шаг 5: Выбираем лучшего кандидата
-            best_candidate = self._select_best_candidate(evaluated_candidates)
+            best_candidate = self._select_best_candidate(eligible_candidates)
             if best_candidate:
-                candidate_score = best_candidate.metrics.composite_score()
+                candidate_score = best_candidate.selection_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
-                
-                # Проверяем, есть ли улучшение
+
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
                     print(f"✓ Improvement found! New best: {candidate_score:.3f}")
                     current_best = best_candidate
-                    best_score = candidate_score
+                    best_score = current_best.selection_score()
+                    best_accuracy = current_best.selection_accuracy()
                     no_improve_iters = 0
                     self.improvements_count += 1
 
                     if validation_examples:
                         print(f"\nValidation Set Evaluation:")
-                        test_metrics = self.scorer.evaluate_prompt(
-                            current_best.prompt_text,
-                            validation_examples,
-                            execute=True,
-                            sample=False,
-                        )
-                        print(f"  Validation score: {test_metrics.composite_score():.3f}")
-                        print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
-                        print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
-                        print(f"  Validation robustness: {test_metrics.metrics['robustness']:.3f}")
-                        print(f"  Validation efficiency: {test_metrics.metrics['efficiency']:.3f}")
-                        print(f"  Validation safety: {test_metrics.metrics['safety']:.3f}")
+                        validation_metrics = current_best.metadata.get("full_validation_metrics", {})
+                        print(f"  Validation score: {best_score:.3f}")
+                        print(f"  Validation accuracy: {best_accuracy:.3f}")
+                        print(f"  Validation f1: {validation_metrics.get('f1', current_best.metrics.metrics['f1']):.3f}")
+                        print(f"  Validation robustness: {validation_metrics.get('robustness', current_best.metrics.metrics['robustness']):.3f}")
+                        print(f"  Validation efficiency: {validation_metrics.get('efficiency', current_best.metrics.metrics['efficiency']):.3f}")
+                        print(f"  Validation safety: {validation_metrics.get('safety', current_best.metrics.metrics['safety']):.3f}")
                 else:
                     print(f"✗ No significant improvement")
                     no_improve_iters += 1
@@ -159,14 +169,13 @@ class LocalOptimizer:
         return current_best
     
     def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example], float]:
-        """Вычисляет train-failures/successes, возвращает реальный failure rate до обрезки."""
         print(f"Executing prompt on {len(examples)} examples to find failures...")
         eval_examples = [
             Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata))
             for ex in examples
         ]
         executed_examples = self.scorer.execute_prompt_batch(node.prompt_text, eval_examples)
-        
+
         failures: List[Example] = []
         successes: List[Example] = []
         for ex in executed_examples:
@@ -178,11 +187,11 @@ class LocalOptimizer:
         real_rate = len(failures) / max(len(executed_examples), 1)
         print(f"Train failures: {len(failures)}/{len(executed_examples)} ({real_rate:.1%})")
 
-        failures_for_gradient = (
-            random.sample(failures, LOCAL_BATCH_SIZE)
-            if len(failures) > LOCAL_BATCH_SIZE
-            else failures
-        )
+        if len(failures) > LOCAL_BATCH_SIZE:
+            step = len(failures) / LOCAL_BATCH_SIZE
+            failures_for_gradient = [failures[int(i * step)] for i in range(LOCAL_BATCH_SIZE)]
+        else:
+            failures_for_gradient = failures
 
         if is_enabled():
             print(
@@ -270,9 +279,23 @@ class LocalOptimizer:
         
         for i, candidate in enumerate(candidates):
             # Проверяем, не оценивали ли мы уже этот промпт
-            key = str(hash(candidate.prompt_text))
+            key = candidate.prompt_text
             if key in self._evaluated_prompts:
                 print(f"  Candidate {i+1}/{len(candidates)}: Skipped (already evaluated)")
+                continue
+
+            existing = self.history.find_node_by_prompt_text(candidate.prompt_text, evaluated_only=True)
+            if existing is not None:
+                print(f"  Candidate {i+1}/{len(candidates)}: Reused cached evaluation")
+                candidate.metrics = deepcopy(existing.metrics)
+                candidate.metadata = deepcopy(existing.metadata)
+                candidate.is_evaluated = True
+                candidate.is_front = existing.is_front
+                candidate.evaluation_examples = deepcopy(existing.evaluation_examples)
+                candidate.evaluation_examples_by_split = deepcopy(existing.evaluation_examples_by_split)
+                self.history.add_node(candidate)
+                self._evaluated_prompts.add(key)
+                evaluated.append(candidate)
                 continue
             
             print(f"  Evaluating candidate {i+1}/{len(candidates)}...", end=" ")

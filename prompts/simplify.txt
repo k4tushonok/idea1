@@ -7,3 +7,4 @@ SIMPLIFICATION GUIDANCE:
 {guidance}
 
 Generate a simplified version:
+Output only the resulting prompt text — not a description of what you changed.

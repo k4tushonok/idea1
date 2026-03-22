@@ -30,7 +30,8 @@ from config import (TOP_BEST_NODES,
                     COMMON_SUBSEQ_LENGTHS,
                     TOP_COMMON_SUBSEQ,
                     RECENT_GENERATIONS_FOR_DIVERSITY,
-                    GLOBAL_OPT_AVG_PATH_LENGTH,)
+                    GLOBAL_OPT_AVG_PATH_LENGTH,
+                    MIN_IMPROVEMENT)
     
 class GlobalOptimizer:
     def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
@@ -93,15 +94,36 @@ class GlobalOptimizer:
         # Шаг 4: Оценка кандидатов
         print("\nStep 4: Evaluating global candidates...")
         evaluated_candidates = self._evaluate_global_candidates(candidates, validation_examples)
-        
-        # Шаг 5: Анализ результатов
+        baseline_accuracy = 0.0
+        best_node = history_analysis.get("best_node")
+        if best_node and best_node.is_evaluated:
+            baseline_accuracy = best_node.selection_accuracy()
+
+        # Фильтруем до анализа
+        valid_for_refinement = [
+            c for c in evaluated_candidates
+            if c.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
+        ]
+        if len(valid_for_refinement) != len(evaluated_candidates):
+            print(
+                f"Filtered out {len(evaluated_candidates) - len(valid_for_refinement)} global candidates "
+                f"by quality gate (baseline accuracy={baseline_accuracy:.3f}, "
+            )
+
+        # Анализируем только допустимых кандидатов
         print("\nStep 5: Analyzing results...")
-        self._analyze_global_results(evaluated_candidates, history_analysis)
-        
+        candidates_to_analyze = valid_for_refinement if valid_for_refinement else evaluated_candidates
+        self._analyze_global_results(candidates_to_analyze, history_analysis)
+
         print(f"\nCompleted in {time.time() - start_time:.2f}s")
-        
+
         self.total_global_steps += 1
-        return evaluated_candidates
+
+        if not valid_for_refinement:
+            print("[diag] All global candidates have zero accuracy — skipping refinement")
+            return []
+
+        return valid_for_refinement
     
     def _analyze_history(self) -> Dict:
         """Анализ всей истории оптимизации. Определяет паттерны, проблемы и возможности"""
@@ -125,7 +147,7 @@ class GlobalOptimizer:
         nodes = self.history.get_evaluated_nodes()
         if not nodes:
             return []
-        nodes.sort(key=lambda n: n.metrics.composite_score())
+        nodes.sort(key=lambda n: n.selection_score())
         return nodes[:bottom_k]
     
     def _identify_patterns(self, best_nodes: List[PromptNode]) -> Dict:
@@ -162,7 +184,7 @@ class GlobalOptimizer:
             "is_stagnant": avg_similarity > STAGNATION_SIMILARITY_THRESHOLD,
             "avg_similarity": avg_similarity,
             "needs_exploration": avg_similarity > STAGNATION_SIMILARITY_THRESHOLD,
-            "best_score": best_nodes[0].metrics.composite_score() if best_nodes else 0.0
+            "best_score": best_nodes[0].selection_score() if best_nodes else 0.0
         }
             
     def _analyze_diversity(self) -> Dict:
@@ -202,7 +224,7 @@ class GlobalOptimizer:
         return {
             "prompts": best_nodes,
             "common_phrases": common_words,
-            "top_scores": [node.metrics.composite_score() for node in best_nodes]
+            "top_scores": [node.selection_score() for node in best_nodes]
         }
 
     def _identify_failed_directions(self) -> List[str]:
@@ -213,11 +235,11 @@ class GlobalOptimizer:
             return []
         
         # Берем нижние
-        threshold = np.percentile([n.metrics.composite_score() for n in all_evaluated], FAILED_PERCENTILE)
+        threshold = np.percentile([n.selection_score() for n in all_evaluated], FAILED_PERCENTILE)
         ops = Counter(
             op.operation_type.value
             for n in all_evaluated
-            if n.metrics.composite_score() <= threshold
+            if n.selection_score() <= threshold
             for op in n.operations
         )
         
@@ -350,7 +372,7 @@ class GlobalOptimizer:
             print(f"\n  Strategy: {strategy_type}")
             print(f"  Score: {score:.3f} (Δ {improvement:+.3f})")
             
-            if improvement > 0:
+            if improvement >= MIN_IMPROVEMENT:
                 improvements.append({
                     "candidate": candidate,
                     "strategy": strategy,

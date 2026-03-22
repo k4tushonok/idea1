@@ -9,3 +9,4 @@ CLARIFICATION NEEDED:
 {content}
 
 Make the prompt clearer regarding this point. Output the complete modified prompt.
+Output only the resulting prompt text — not a description of what you changed.

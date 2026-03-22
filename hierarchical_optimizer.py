@@ -82,18 +82,28 @@ class HierarchicalOptimizer:
             print(f"  Population size: {len(population)}")
             
             new_candidates = []
+            optimized_prompts_this_run: set = set()
             
             # Локальная оптимизация для каждого узла в популяции
             for i, node in enumerate(population, 1):
-                print(f"\n  Optimizing node {i}/{len(population)} (score: {node.metrics.composite_score():.3f})")
+                print(f"\n  Optimizing node {i}/{len(population)} (score: {node.selection_score():.3f})")
                 if is_enabled():
                     print(
                         f"[diag] population node: node_id={node.id} "
                         f"prompt_id={prompt_id(node.prompt_text)} gen={node.generation}"
                     )
                 
+                if node.prompt_text in optimized_prompts_this_run:
+                    print(f"  Skipping node {i} — already optimized this run, keeping as-is")
+                    new_candidates.append(node)
+                    continue
+                
+                optimized_prompts_this_run.add(node.prompt_text)
+    
                 try:
                     self.local_optimizer._evaluated_prompts.clear()
+                    self.editor._cache.clear()
+                    self.gradient_gen._cache.clear()
                     
                     improved_node = self.local_optimizer.optimize(
                         starting_node=node,
@@ -119,8 +129,8 @@ class HierarchicalOptimizer:
                         validation_examples=validation_examples
                     )
                     
-                    # Сортируем и берём только топ-2
-                    global_candidates_sorted = sorted(global_candidates, key=lambda n: n.metrics.composite_score(), reverse=True)
+                    # Сортируем и берём только топ
+                    global_candidates_sorted = sorted(global_candidates, key=lambda n: n.selection_score(), reverse=True)
                     top_global = global_candidates_sorted[:2]
                     
                     # Локальная оптимизация для каждого глобального кандидата
@@ -130,7 +140,9 @@ class HierarchicalOptimizer:
                         print(f"\n  Refining global candidate {i}/{len(top_global)}")
                         try:
                             self.local_optimizer._evaluated_prompts.clear()
-
+                            self.editor._cache.clear()
+                            self.gradient_gen._cache.clear()
+                            
                             refined = self.local_optimizer.optimize(
                                 starting_node=global_candidate,
                                 train_examples=train_examples,
@@ -159,8 +171,8 @@ class HierarchicalOptimizer:
             )
             
             # Обновляем лучший узел
-            generation_best = max(population, key=lambda n: n.metrics.composite_score())
-            generation_best_score = generation_best.metrics.composite_score()
+            generation_best = max(population, key=lambda n: n.selection_score())
+            generation_best_score = generation_best.selection_score()
             
             print(f"\n  Generation best: {generation_best_score:.3f}")
             print(f"  Overall best: {best_score:.3f}")
@@ -249,7 +261,7 @@ class HierarchicalOptimizer:
             return candidates
         
         # Находим и сохраняем абсолютно лучшего кандидата
-        best_candidate = max(candidates, key=lambda n: n.metrics.composite_score())
+        best_candidate = max(candidates, key=lambda n: n.selection_score())
         
         # Стратегия 1: Паретто-фронт (если есть)
         front = self.history.get_pareto_front()
@@ -260,7 +272,7 @@ class HierarchicalOptimizer:
         # Стратегия 2: Топ по композитной метрике
         candidates_sorted = sorted(
             candidates,
-            key=lambda n: n.metrics.composite_score(),
+            key=lambda n: n.selection_score(),
             reverse=True
         )
         
@@ -312,7 +324,7 @@ class HierarchicalOptimizer:
                 selected_ids.add(node.id)
         
         print(f"  Selected population ({len(selected)}):")
-        print(f"    Best: {best_candidate.metrics.composite_score():.3f} (generation {best_candidate.generation})")
+        print(f"    Best: {best_candidate.selection_score():.3f} (generation {best_candidate.generation})")
         print(f"    Pareto: {len([n for n in selected if n.id in front_ids])}")
         
         return selected[:population_size]
@@ -332,8 +344,14 @@ class HierarchicalOptimizer:
             
             # Результаты
             "results": {
-                "best_score": self.best_node.metrics.composite_score(),
-                "best_metrics": self.best_node.metrics.to_dict(),
+                "best_score": self.best_node.metadata.get(
+                    "full_validation_score",
+                    self.best_node.metrics.composite_score()
+                ),
+                "best_score_sampled": self.best_node.metrics.composite_score(),
+                "best_score_full_validation": self.best_node.metadata.get("full_validation_score"),
+                "best_accuracy_full_validation": self.best_node.metadata.get("full_validation_accuracy"),
+                "best_metrics_sampled": self.best_node.metrics.to_dict(),
                 "best_prompt": self.best_node.prompt_text,
                 "best_node_id": self.best_node.id
             },

@@ -283,17 +283,22 @@ Return JSON only.
         for ex in examples:
             if ex.actual_output is None:
                 continue
+
+            correct = ex.is_correct() or ex.is_correct_by_llm(self.llm)
+
             if "accuracy" in per_metric:
-                correct = ex.is_correct() or ex.is_correct_by_llm(self.llm)
                 per_metric["accuracy"].append(1.0 if correct else 0.0)
+
             try:
-                if ex.expected_output is not None and ex.expected_output.strip() and ex.expected_output.strip().lower() == ex.actual_output.strip().lower():
+                if (ex.expected_output is not None and ex.expected_output.strip()
+                        and ex.expected_output.strip().lower() == ex.actual_output.strip().lower()):
                     for name in per_metric.keys():
                         if name != "accuracy":
                             per_metric[name].append(1.0)
                     continue
             except Exception:
                 pass
+
             judge_prompt = self._build_combined_judge_prompt(
                 prompt=prompt,
                 input_text=ex.input_text,
@@ -302,11 +307,18 @@ Return JSON only.
             )
             raw = self.llm.invoke(prompt=judge_prompt)
             parsed = self._parse_combined_judge_output(raw)
-            for name, value in parsed.items():
-                if name != "accuracy":
-                    per_metric[name].append(value)
 
-        return {
+            for name, value in parsed.items():
+                if name == "accuracy":
+                    continue
+                per_metric[name].append(value)
+
+        result = {
             name: (sum(vals) / len(vals) if vals else 0.0)
             for name, vals in per_metric.items()
         }
+            
+        if result.get("accuracy", 0.0) < 0.2:
+            result["f1"] = min(result.get("f1", 0.0), result["accuracy"])
+            
+        return result

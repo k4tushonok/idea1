@@ -8,4 +8,6 @@ CURRENT PROMPT:
 RESTRUCTURING GUIDANCE:
 {content}
 
-Restructure the prompt while maintaining its core functionality. Output the complete modified prompt.
+OUTPUT REQUIREMENT: The result must be a prompt FOR the language model performing
+the task — not a description of the restructuring itself. Output only the
+restructured prompt text.

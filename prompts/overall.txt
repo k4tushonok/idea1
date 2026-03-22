@@ -9,3 +9,4 @@ MODIFICATION:
 {content}
 
 Apply this modification. Output the complete modified prompt.
+Output only the resulting prompt text — not a description of what you changed.

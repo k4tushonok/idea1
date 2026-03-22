@@ -9,3 +9,4 @@ EXAMPLE TO ADD:
 {content}
 
 Add this example in an appropriate place. Output the complete modified prompt.
+Output only the resulting prompt text — not a description of what you changed.

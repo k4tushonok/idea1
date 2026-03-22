@@ -207,11 +207,23 @@ class PromptNode:
         """Добавление дочернего узла"""
         if child_id not in self.children_ids:
             self.children_ids.append(child_id)
+
+    def selection_score(self) -> float:
+        try:
+            return float(self.metadata["full_validation_score"])
+        except Exception:
+            return self.metrics.composite_score()
+
+    def selection_accuracy(self) -> float:
+        try:
+            return float(self.metadata["full_validation_accuracy"])
+        except Exception:
+            return float(self.metrics.metrics.get("accuracy", 0.0))
     
     def get_lineage_summary(self) -> str:
         """Краткая сводка о происхождении промпта. Полезно для передачи LLM в контексте оптимизации"""
         ops_summary = ", ".join([op.operation_type.value for op in self.operations[-LINEAGE_RECENT_OPS_LIMIT:]])
-        return f"Gen {self.generation}, Source: {self.source.value}, Recent ops: [{ops_summary}], Score: {self.metrics.composite_score():.3f}"
+        return f"Gen {self.generation}, Source: {self.source.value}, Recent ops: [{ops_summary}], Score: {self.selection_score():.3f}"
     
     def to_dict(self) -> Dict:
         """Сериализация для сохранения"""

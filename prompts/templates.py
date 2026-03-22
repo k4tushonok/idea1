@@ -202,15 +202,26 @@ class Templates:
     def build_editing_prompt(current_prompt: str, gradient: TextGradient, num_variants: int) -> str:
         suggestions = "\n".join(f"{i}. {s}" for i, s in enumerate(gradient.specific_suggestions, 1))
 
+        failure_examples = gradient.failure_examples
+        if failure_examples:
+            n = len(failure_examples)
+            if n <= 3:
+                sampled = failure_examples
+            else:
+                indices = [0, n // 2, n - 1]
+                sampled = [failure_examples[i] for i in indices]
+        else:
+            sampled = []
+
         failures = "\n".join(
             f"{i}. Input: {e.input_text}\n   Expected: {e.expected_output}\n   Got: {e.actual_output}"
-            for i, e in enumerate(gradient.failure_examples[:3], 1)
+            for i, e in enumerate(sampled, 1)
         )
-        
+
         template = Templates.load_template("editing")
         return template.format(
             current_prompt=current_prompt,
-            failures_block=failures,           
+            failures_block=failures,
             error_analysis=gradient.error_analysis,
             suggested_direction=gradient.suggested_direction,
             specific_suggestions_block=suggestions,

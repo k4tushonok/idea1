@@ -1,5 +1,5 @@
 Group these failures into 3-5 categories based on the type of error. For each category, provide:
-- Category name (e.g., "missing_context", "incorrect_format", "logic_error")
+- Category name describing the root cause of the error
 - Brief description
 - List of example numbers that belong to this category
 

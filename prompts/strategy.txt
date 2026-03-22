@@ -41,6 +41,11 @@ YOUR TASK:
 Generate exactly 4 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
 Anchor each strategy in the evidence above (e.g., leverage common phrases, avoid worst prompt patterns, address stagnation/diversity).
 
+TASK CONTRACT:
+- All strategies must preserve the core task the prompt is designed to perform.
+- Do not suggest strategies that change what the model is asked to do.
+- Do not mention optimizer mechanics or prompt-editing operations in SPECIFIC_ACTION.
+
 OUTPUT FORMAT:
 For each strategy, use exactly this format:
 

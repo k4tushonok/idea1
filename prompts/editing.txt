@@ -7,6 +7,13 @@ You are an expert prompt engineer. Your task is to improve a prompt based on ana
 ## FAILURE EXAMPLES (what the current prompt produces incorrectly):
 {failures_block}
 
+CRITICAL: Do NOT copy specific values, titles, names, numbers, or entities
+from these examples into the prompt text. Examples are for analysis only.
+The prompt must work on any input, not on these specific cases.
+CRITICAL 2: The output must be a prompt FOR the language model performing the task,
+not a description of how to edit a prompt. Write what the model should DO,
+not what you are changing.
+
 ## ANALYSIS OF PROBLEMS:
 {error_analysis}
 
@@ -25,8 +32,7 @@ Generate {num_variants} improved versions of the prompt that address the problem
 3. Apply the suggested improvements while maintaining the core purpose
 4. Make variants somewhat diverse - try different approaches to solving the same problems
 5. Focus on being concrete and specific in instructions
-6. Do NOT add unrelated domain-specific examples (e.g. about quantum physics, photosynthesis)
-   unless they directly illustrate the type of task being optimized
+6. Do NOT inject domain-specific content unrelated to the task being optimized.
 7. Consider adding examples, constraints, or clarifications where needed
 8. Inside each PROMPT code block, start directly with the prompt text
 

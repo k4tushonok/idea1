@@ -9,3 +9,4 @@ NEW INSTRUCTION TO ADD:
 {content}
 
 Integrate this instruction naturally into the prompt. Output the complete modified prompt.
+Output only the resulting prompt text — not a description of what you changed.
