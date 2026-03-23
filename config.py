@@ -1,11 +1,10 @@
 from typing import Dict
 
-LOCAL_ITERATIONS_PER_GENERATION: int = 2 # Количество локальных итераций 
-LOCAL_CANDIDATES_PER_ITERATION: int = 3  # Сколько градиентов генерируем за одну итерацию
+LOCAL_ITERATIONS_PER_GENERATION: int = 3 # Количество локальных итераций 
+LOCAL_CANDIDATES_PER_ITERATION: int = 2  # Сколько градиентов генерируем за одну итерацию
 LOCAL_BATCH_SIZE: int = 20               # Максимальное число failure-примеров в одном батче
 LOCAL_MAX_EXAMPLES: int = 15             # Максимальное число примеров, передаваемых в один LLM вызов
-LOCAL_BEAM_WIDTH: int = 3
-LOCAL_PARENTS_PER_ITERATION: int = 2
+LOCAL_PARENTS_PER_ITERATION: int = 3
 GLOBAL_CANDIDATES: int = 1               # Ширина глобального поиска
 GLOBAL_TRIGGER_INTERVAL: int = 3         # Каждые N поколений
 GLOBAL_HISTORY_WINDOW: int = 15          # Сколько узлов истории анализировать

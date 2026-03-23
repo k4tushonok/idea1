@@ -102,6 +102,7 @@ class HierarchicalOptimizer:
     
                 try:
                     self.local_optimizer._evaluated_prompts.clear()
+                    self.local_optimizer._train_outcomes_cache.clear()
                     self.editor._cache.clear()
                     self.gradient_gen._cache.clear()
                     
@@ -140,6 +141,7 @@ class HierarchicalOptimizer:
                         print(f"\n  Refining global candidate {i}/{len(top_global)}")
                         try:
                             self.local_optimizer._evaluated_prompts.clear()
+                            self.local_optimizer._train_outcomes_cache.clear()
                             self.editor._cache.clear()
                             self.gradient_gen._cache.clear()
                             

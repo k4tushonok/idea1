@@ -16,7 +16,6 @@ from config import (
     MIN_EXAMPLES_FOR_CONTRASTIVE,
     PATIENCE,
     SIMILARITY_THRESHOLD,
-    LOCAL_BEAM_WIDTH,
     LOCAL_PARENTS_PER_ITERATION
 )
 
@@ -34,6 +33,7 @@ class LocalOptimizer:
         self.iteration_stats: List[Dict] = []
         
         # Кэш для предотвращения повторной оценки
+        self._train_outcomes_cache: Dict[str, Tuple] = {}
         self._evaluated_prompts: Set[str] = set()
         self.llm = llm
     
@@ -114,7 +114,7 @@ class LocalOptimizer:
 
             # Pre-gate should compare sampled metrics to sampled metrics.
             # Full-validation metrics are used later only for confirmation.
-            baseline_accuracy = max(current_beam, key=lambda n: n.selection_score()).metrics.metrics.get("accuracy", 0.0)
+            baseline_accuracy = min(n.metrics.metrics.get("accuracy", 0.0) for n in current_beam)
             eligible_candidates = [
                 candidate for candidate in evaluated_candidates
                 if candidate.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
@@ -129,32 +129,23 @@ class LocalOptimizer:
                 all_for_beam = eligible_candidates + current_beam
                 all_for_beam = sorted(all_for_beam, key=lambda n: n.selection_score(), reverse=True)
                 
-                new_beam = all_for_beam[:LOCAL_BEAM_WIDTH]
-                
-                # Шаг 5: Выбираем лучшего кандидата
-                best_candidate = new_beam[0]
+                current_beam = all_for_beam[:LOCAL_PARENTS_PER_ITERATION]
+                best_candidate = current_beam[0]
                 candidate_score = best_candidate.selection_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
 
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
                     print(f"✓ Improvement found! Updating beam")
-                    current_beam = new_beam
                     best_score = candidate_score
-                    best_accuracy = best_candidate.selection_accuracy()
                     no_improve_iters = 0
                     self.improvements_count += 1
                 else:
-                    print(f"✗ No significant improvement")
+                    print(f"Beam updated but no significant improvement over best")
                     no_improve_iters += 1
             else:
                 print("✗ No valid candidates generated")
                 no_improve_iters += 1
-
-            # Early stopping по failure rate
-            if real_rate >= prev_real_rate - 0.01:
-                no_improve_iters += 1
-            prev_real_rate = real_rate
 
             iteration_time = time.time() - iteration_start_time
             calls_after = getattr(self.scorer.llm, 'total_api_calls', 0)
@@ -183,6 +174,12 @@ class LocalOptimizer:
         return max(current_beam, key=lambda n: n.selection_score())
     
     def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example], float]:
+        cache_key = node.prompt_text
+        if cache_key in self._train_outcomes_cache:
+            failures, successes, rate = self._train_outcomes_cache[cache_key]
+            print(f"  Train outcomes: cached ({len(failures)} failures, {rate:.1%})")
+            return failures, successes, rate
+        
         print(f"Executing prompt on {len(examples)} examples to find failures...")
         eval_examples = [
             Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata))
@@ -213,6 +210,7 @@ class LocalOptimizer:
                 f"successes={len(successes)} failure_rate={real_rate:.3f}"
             )
 
+        self._train_outcomes_cache[cache_key] = (failures_for_gradient, successes, real_rate)
         return failures_for_gradient, successes, real_rate
     
     def _generate_gradients(self, node: PromptNode, failure_examples: List[Example], success_examples: List[Example]) -> List[TextGradient]:
@@ -319,7 +317,7 @@ class LocalOptimizer:
                     f"prompt_id={prompt_id(candidate.prompt_text)} len={len(candidate.prompt_text)}"
                 )
 
-            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation", seed_offset=i)
+            candidate = self.scorer.evaluate_node(candidate, validation_examples, execute=True, split="validation")
             score = candidate.metrics.composite_score()
             print(f"Score: {score:.3f}")
                 
