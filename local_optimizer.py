@@ -1,14 +1,25 @@
 from typing import List, Dict, Optional, Set, Tuple
 from copy import deepcopy
 import time
-import random
 from data_structures import Example, PromptNode, TextGradient
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
 from diagnostics import is_enabled, prompt_id, preview_text
-from config import LOCAL_ITERATIONS_PER_GENERATION, MIN_IMPROVEMENT, LOCAL_BATCH_SIZE, CLUSTERING_FAILURE_MULTIPLIER, MAX_CONTEXT_OPERATIONS, MIN_EXAMPLES_FOR_CONTRASTIVE, PATIENCE, SIMILARITY_THRESHOLD
+from config import (
+    LOCAL_ITERATIONS_PER_GENERATION,
+    MIN_IMPROVEMENT,
+    LOCAL_BATCH_SIZE,
+    CLUSTERING_FAILURE_MULTIPLIER,
+    MAX_CONTEXT_OPERATIONS,
+    MIN_EXAMPLES_FOR_CONTRASTIVE,
+    PATIENCE,
+    SIMILARITY_THRESHOLD,
+    LOCAL_BEAM_WIDTH,
+    LOCAL_PARENTS_PER_ITERATION
+)
+
 
 class LocalOptimizer:
     def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, gradient_generator: TextGradientGenerator, prompt_editor: PromptEditor, llm):
@@ -43,9 +54,9 @@ class LocalOptimizer:
             print(f"Starting score: {starting_node.metrics.composite_score():.3f}")
         
         # Текущий лучший узел
-        current_best = starting_node
-        best_score = current_best.selection_score()
-        best_accuracy = current_best.selection_accuracy()
+        current_beam: List[PromptNode] = [starting_node]
+        best_score = starting_node.selection_score()
+        best_accuracy = starting_node.selection_accuracy()
         no_improve_iters = 0
         prev_real_rate = 1.0
         
@@ -55,47 +66,55 @@ class LocalOptimizer:
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
             print(f"\n--- Iteration {iteration + 1} ---")
-            if is_enabled():
-                print(
-                    f"[diag] local iteration state: current_best_id={current_best.id} "
-                    f"prompt_id={prompt_id(current_best.prompt_text)} score={best_score:.3f}"
-                )
+                
+            # Берём топ-кандидатов из beam как родителей
+            parents = sorted(current_beam, key=lambda n: n.selection_score(), reverse=True)
+            if len(parents) > LOCAL_PARENTS_PER_ITERATION:
+                parents = parents[:LOCAL_PARENTS_PER_ITERATION]
             
-            # Шаг 1: Получаем провалы текущего лучшего промпта
-            failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(current_best, train_examples)
-            if is_enabled():
-                print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
-            if not failure_examples:
-                print("No failures found - prompt is perfect on training set!")
-                # Все еще выполняем валидацию на validation_examples
-                if validation_examples:
-                    print(f"\nValidation Set Evaluation:")
-                    test_metrics = self.scorer.evaluate_prompt(
-                        current_best.prompt_text,
-                        validation_examples,
-                        execute=True,
-                        sample=False,
-                    )
-                    print(f"  Validation score: {test_metrics.composite_score():.3f}")
-                    print(f"  Validation accuracy: {test_metrics.metrics['accuracy']:.3f}")
-                    print(f"  Validation f1: {test_metrics.metrics['f1']:.3f}")
-                break
+            print(f"Generating from {len(parents)} parents...")
             
-            # Шаг 2: Генерируем текстовые градиенты
-            gradients = self._generate_gradients(current_best, failure_examples, success_examples)
-            print(f"Generated {len(gradients)} gradients")
+            all_candidates: List[PromptNode] = []
             
-            # Шаг 3: Создаем варианты на основе градиентов
-            candidates = self._generate_candidates(current_best, gradients)
-            print(f"Generated {len(candidates)} candidate prompts")
+            for p_idx, parent in enumerate(parents, 1):
+                print(f"  Parent {p_idx}/{len(parents)} (score={parent.selection_score():.3f})")
+            
+                # Шаг 1: Получаем провалы текущего лучшего промпта
+                failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(parent, train_examples)
+                if is_enabled():
+                    print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
+                if not failure_examples:
+                    print("No failures found - prompt is perfect on training set!")
+                    continue
+                
+                # Шаг 2: Генерируем текстовые градиенты
+                gradients = self._generate_gradients(parent, failure_examples, success_examples)
+                print(f"    Generated {len(gradients)} gradients")
+                
+                # Шаг 3: Создаем варианты на основе градиентов
+                candidates = self._generate_candidates(parent, gradients)
+                print(f"    Generated {len(candidates)} candidates")
+                
+                all_candidates.extend(candidates)
+            
+            # Дедупликация по тексту промпта
+            unique_candidates = []
+            seen = set()
+            for c in all_candidates:
+                pid = prompt_id(c.prompt_text)
+                if pid not in seen:
+                    seen.add(pid)
+                    unique_candidates.append(c)
+            
+            print(f"Total unique candidates after dedup: {len(unique_candidates)}")
             
             # Шаг 4: Оцениваем кандидатов
-            evaluated_candidates = self._evaluate_candidates(candidates, validation_examples)
+            evaluated_candidates = self._evaluate_candidates(unique_candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
 
             # Pre-gate should compare sampled metrics to sampled metrics.
             # Full-validation metrics are used later only for confirmation.
-            baseline_accuracy = current_best.metrics.metrics.get("accuracy", 0.0)
+            baseline_accuracy = max(current_beam, key=lambda n: n.selection_score()).metrics.metrics.get("accuracy", 0.0)
             eligible_candidates = [
                 candidate for candidate in evaluated_candidates
                 if candidate.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
@@ -105,31 +124,26 @@ class LocalOptimizer:
                     f"Filtered out {len(evaluated_candidates) - len(eligible_candidates)} candidates "
                     f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
                 )
-            
-            # Шаг 5: Выбираем лучшего кандидата
-            best_candidate = self._select_best_candidate(eligible_candidates)
-            if best_candidate:
+
+            if eligible_candidates:
+                all_for_beam = eligible_candidates + current_beam
+                all_for_beam = sorted(all_for_beam, key=lambda n: n.selection_score(), reverse=True)
+                
+                new_beam = all_for_beam[:LOCAL_BEAM_WIDTH]
+                
+                # Шаг 5: Выбираем лучшего кандидата
+                best_candidate = new_beam[0]
                 candidate_score = best_candidate.selection_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
 
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
-                    print(f"✓ Improvement found! New best: {candidate_score:.3f}")
-                    current_best = best_candidate
-                    best_score = current_best.selection_score()
-                    best_accuracy = current_best.selection_accuracy()
+                    print(f"✓ Improvement found! Updating beam")
+                    current_beam = new_beam
+                    best_score = candidate_score
+                    best_accuracy = best_candidate.selection_accuracy()
                     no_improve_iters = 0
                     self.improvements_count += 1
-
-                    if validation_examples:
-                        print(f"\nValidation Set Evaluation:")
-                        validation_metrics = current_best.metadata.get("full_validation_metrics", {})
-                        print(f"  Validation score: {best_score:.3f}")
-                        print(f"  Validation accuracy: {best_accuracy:.3f}")
-                        print(f"  Validation f1: {validation_metrics.get('f1', current_best.metrics.metrics['f1']):.3f}")
-                        print(f"  Validation robustness: {validation_metrics.get('robustness', current_best.metrics.metrics['robustness']):.3f}")
-                        print(f"  Validation efficiency: {validation_metrics.get('efficiency', current_best.metrics.metrics['efficiency']):.3f}")
-                        print(f"  Validation safety: {validation_metrics.get('safety', current_best.metrics.metrics['safety']):.3f}")
                 else:
                     print(f"✗ No significant improvement")
                     no_improve_iters += 1
@@ -166,7 +180,7 @@ class LocalOptimizer:
         print(f"Improvements: {self.improvements_count}")
         print(f"{'='*60}\n")
         
-        return current_best
+        return max(current_beam, key=lambda n: n.selection_score())
     
     def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example], float]:
         print(f"Executing prompt on {len(examples)} examples to find failures...")

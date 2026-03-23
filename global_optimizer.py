@@ -107,7 +107,7 @@ class GlobalOptimizer:
         if len(valid_for_refinement) != len(evaluated_candidates):
             print(
                 f"Filtered out {len(evaluated_candidates) - len(valid_for_refinement)} global candidates "
-                f"by quality gate (baseline accuracy={baseline_accuracy:.3f}, "
+                f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
             )
 
         # Анализируем только допустимых кандидатов

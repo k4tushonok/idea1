@@ -28,13 +28,12 @@ Generate {num_variants} improved versions of the prompt that address the problem
 
 ## REQUIREMENTS:
 1. Variants should be different.
-2. Each variant should be a COMPLETE, FUNCTIONAL prompt (not just modifications)
-3. Apply the suggested improvements while maintaining the core purpose
-4. Make variants somewhat diverse - try different approaches to solving the same problems
-5. Focus on being concrete and specific in instructions
-6. Do NOT inject domain-specific content unrelated to the task being optimized.
-7. Consider adding examples, constraints, or clarifications where needed
-8. Inside each PROMPT code block, start directly with the prompt text
+2. Each variant should be a COMPLETE, FUNCTIONAL prompt
+3. Make variants AS DIVERSE AS POSSIBLE in structure, wording and approach
+4. Focus on being concrete and specific in instructions
+5. Do NOT inject domain-specific content...
+6. Consider adding examples, constraints, or clarifications where needed
+7. Inside each PROMPT code block, start directly with the prompt text
 
 ## OUTPUT FORMAT:
 For each variant, use this exact format:

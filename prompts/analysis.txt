@@ -48,4 +48,5 @@ Rate the urgency of these changes from 0.0 to 1.0, where:
 - 0.3 = Minor refinements
 Priority: [your rating]
 
+CRITICAL: Prefer high-impact structural changes (restructure the order, add constraints, change formatting) over tiny wording tweaks. 
 Focus on being specific, actionable, and grounded in the examples provided.
