@@ -53,6 +53,9 @@ class GlobalOptimizer:
 
         # Wrong-exemplars: единый накопленный счётчик провалов по input_text (все шаги)
         self._failure_counter: Counter = Counter()
+        # Кэш Example-объектов по input_text — нужен потому что failure-примеры берутся из
+        # validation_examples, тогда как _top_exemplars_from_counter ищет по train_examples.
+        self._failure_examples_cache: Dict[str, Example] = {}
         self._processed_node_ids: set = set()
         # MD5-хэши всех когда-либо сгенерированных кандидатов для быстрой дедупликации
         self._seen_prompt_hashes: set = set()
@@ -273,18 +276,41 @@ class GlobalOptimizer:
                 continue
             for ex in node.evaluation_examples.get("failures", []):
                 self._failure_counter[ex.input_text] += 1
+                if ex.input_text not in self._failure_examples_cache:
+                    self._failure_examples_cache[ex.input_text] = ex
             self._processed_node_ids.add(node.id)
 
     def _top_exemplars_from_counter(self, train_examples: List[Example], counter: Counter) -> List[Example]:
-        """Возвращает топ-EXEMPLAR_COUNT примеров из train_examples по частоте провалов в counter."""
-        lookup = {ex.input_text: ex for ex in train_examples}
+        """Возвращает топ-EXEMPLAR_COUNT примеров по частоте провалов в counter.
+
+        Приоритет поиска:
+        1. train_examples (lookup по input_text) — совпадает, если провал произошёл на обучающем примере.
+        2. _failure_examples_cache — всегда содержит Example-объекты провалившихся примеров;
+           нужен, потому что оценка узлов ведётся на validation_examples, тогда как сюда
+           передаются train_examples. Эти сплиты не пересекаются → без fallback exemplars=0.
+        """
+        train_lookup = {ex.input_text: ex for ex in train_examples}
         result = []
+        from_train = 0
+        from_cache = 0
         for input_text, _ in counter.most_common():
-            ex = lookup.get(input_text)
+            ex = train_lookup.get(input_text)
+            if ex is not None:
+                from_train += 1
+            else:
+                ex = self._failure_examples_cache.get(input_text)
+                if ex is not None:
+                    from_cache += 1
             if ex is not None:
                 result.append(Example(input_text=ex.input_text, expected_output=ex.expected_output))
                 if len(result) >= EXEMPLAR_COUNT:
                     break
+        if is_enabled():
+            print(
+                f"[diag] _top_exemplars_from_counter: total_counter={len(counter)} "
+                f"train_lookup_size={len(train_lookup)} cache_size={len(self._failure_examples_cache)} "
+                f"result={len(result)} (from_train={from_train} from_cache={from_cache})"
+            )
         return result
 
     def _exemplars_current_most_frequent(self, train_examples: List[Example]) -> List[Example]:
@@ -294,6 +320,8 @@ class GlobalOptimizer:
         for node in self._get_meta_prompt_nodes():
             for ex in node.evaluation_examples.get("failures", []):
                 counter[ex.input_text] += 1
+                if ex.input_text not in self._failure_examples_cache:
+                    self._failure_examples_cache[ex.input_text] = ex
         return self._top_exemplars_from_counter(train_examples, counter)
 
     def _exemplars_random(self, train_examples: List[Example], seed: int) -> List[Example]:
