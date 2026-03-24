@@ -3,6 +3,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 import uuid
+
 from config import (
     METRIC_WEIGHTS,
     LINEAGE_RECENT_OPS_LIMIT,
@@ -16,17 +17,6 @@ class OptimizationSource(Enum):
     LOCAL = "local"              # Локальная оптимизация 
     GLOBAL = "global"            # Глобальная оптимизация 
     MANUAL = "manual"            # Ручное редактирование
-
-class OperationType(Enum):
-    """Типы операций редактирования промпта"""
-    ADD_INSTRUCTION = "add_instruction"        # Добавление инструкции
-    MODIFY_INSTRUCTION = "modify_instruction"  # Изменение существующей инструкции
-    REMOVE_INSTRUCTION = "remove_instruction"  # Удаление инструкции
-    ADD_EXAMPLE = "add_example"                # Добавление примера
-    REPHRASE = "rephrase"                      # Переформулировка
-    RESTRUCTURE = "restructure"                # Структурная реорганизация
-    ADD_CONSTRAINT = "add_constraint"          # Добавление ограничения
-    CLARIFY = "clarify"                        # Уточнение формулировки
 
 @dataclass
 class Example:
@@ -130,7 +120,6 @@ class TextGradient:
 @dataclass
 class EditOperation:
     """Операция редактирования промпта. Отслеживает, что и почему было изменено"""
-    operation_type: OperationType
     description: str                                # Описание изменения
     gradient_source: Optional[TextGradient] = None  # Градиент, вызвавший изменение
     before_snippet: str = ""                        # Фрагмент промпта до изменения
@@ -138,7 +127,6 @@ class EditOperation:
     
     def to_dict(self) -> Dict:
         return {
-            "operation_type": self.operation_type.value,
             "description": self.description,
             "gradient_source": self.gradient_source.to_dict() if self.gradient_source else None,
             "before_snippet": self.before_snippet,
@@ -148,7 +136,7 @@ class EditOperation:
     @classmethod
     def from_dict(cls, data: Dict) -> 'EditOperation':
         data = data.copy()
-        data["operation_type"] = OperationType(data["operation_type"])
+        data.pop("operation_type", None)
         if data.get("gradient_source"):
             data["gradient_source"] = TextGradient.from_dict(data["gradient_source"])
         return cls(**data)
@@ -222,7 +210,7 @@ class PromptNode:
     
     def get_lineage_summary(self) -> str:
         """Краткая сводка о происхождении промпта. Полезно для передачи LLM в контексте оптимизации"""
-        ops_summary = ", ".join([op.operation_type.value for op in self.operations[-LINEAGE_RECENT_OPS_LIMIT:]])
+        ops_summary = ", ".join([op.description for op in self.operations[-LINEAGE_RECENT_OPS_LIMIT:]])
         return f"Gen {self.generation}, Source: {self.source.value}, Recent ops: [{ops_summary}], Score: {self.selection_score():.3f}"
     
     def to_dict(self) -> Dict:

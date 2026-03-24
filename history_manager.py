@@ -167,7 +167,7 @@ class HistoryManager:
         return front
     
     def analyze_successful_operations(self) -> Dict[str, int]:
-        """Анализ типов операций, которые привели к улучшению"""
+        """Анализ изменений, которые привели к улучшению"""
         operation_counts = defaultdict(int)
         
         for node in self.get_evaluated_nodes():
@@ -182,9 +182,10 @@ class HistoryManager:
             improvement = (node.selection_score() - parent.selection_score())
             
             if improvement >= MIN_IMPROVEMENT:
-                # Считаем операции, приведшие к улучшению
+                # Считаем изменения, приведшие к улучшению (по описанию)
                 for op in node.operations:
-                    operation_counts[op.operation_type.value] += 1
+                    key = op.description[:50] if op.description else "unknown"
+                    operation_counts[key] += 1
         
         return dict(operation_counts)
     

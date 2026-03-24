@@ -39,7 +39,6 @@ Generate {num_variants} improved versions of the prompt that address the problem
 For each variant, use this exact format:
 VARIANT [number]:
 CHANGES MADE: [Brief description of what you changed and why]
-OPERATION TYPE: [Choose one: add_instruction, modify_instruction, rephrase, add_example, add_constraint, clarify, restructure]
 PROMPT:
 ```
 [The complete improved prompt here]

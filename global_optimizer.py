@@ -1,11 +1,11 @@
-from typing import List, Dict, Tuple, Callable
+from typing import List, Dict
 import numpy as np
 from collections import Counter
 import time
 import statistics
 from prompts.templates import Templates
 from llm.llm_client import BaseLLM
-from data_structures import Example, PromptNode, OptimizationSource, OperationType
+from data_structures import Example, PromptNode, OptimizationSource
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
@@ -17,7 +17,6 @@ from config import (TOP_BEST_NODES,
                     COMMON_WORD_MIN_FREQ,
                     FAILED_PERCENTILE,
                     FAILED_OP_MIN_COUNT,
-                    MIN_OPERATION_USAGE,
                     MIN_GLOBAL_SOURCE_USAGE,
                     STAGNATION_SIMILARITY_THRESHOLD,
                     DIVERSITY_DISTANCE_THRESHOLD,
@@ -27,8 +26,6 @@ from config import (TOP_BEST_NODES,
                     GLOBAL_CANDIDATES,
                     SIMILARITY_THRESHOLD,
                     GLOBAL_TRIGGER_INTERVAL,
-                    COMMON_SUBSEQ_LENGTHS,
-                    TOP_COMMON_SUBSEQ,
                     RECENT_GENERATIONS_FOR_DIVERSITY,
                     GLOBAL_OPT_AVG_PATH_LENGTH,
                     MIN_IMPROVEMENT)
@@ -47,16 +44,7 @@ class GlobalOptimizer:
         self.successful_global_changes = 0
         
         # История глобальных стратегий
-        self.applied_strategies: List[Dict] = []
-        
-        self._strategy_dispatch: Dict[str, Callable] = {
-            "COMBINE": self.editor.apply_combine_strategy,
-            "RESTRUCTURE": self.editor.apply_restructure_strategy,
-            "DIVERSIFY": self.editor.apply_diversify_strategy,
-            "SPECIALIZE": self.editor.apply_specialize_strategy,
-            "SIMPLIFY": self.editor.apply_simplify_strategy,
-            "EXPAND": self.editor.apply_expand_strategy,
-        }        
+        self.applied_strategies: List[Dict] = []        
         
     def optimize(self, current_generation: int, train_examples: List[Example], validation_examples: List[Example]) -> List[PromptNode]:
         print("\n" + "=" * 60)
@@ -80,7 +68,7 @@ class GlobalOptimizer:
         
         print(f"Generated {len(strategies)} strategies")
         for i, strategy in enumerate(strategies, 1):
-            print(f"  {i}. {strategy['type']}: {strategy['description'][:80]}...")
+            print(f"  {i}. {strategy['description']}...")
             if is_enabled():
                 print(f"[diag]   strategy action: '{preview_text(strategy.get('action', ''), 220)}'")
         
@@ -152,26 +140,11 @@ class GlobalOptimizer:
     
     def _identify_patterns(self, best_nodes: List[PromptNode]) -> Dict:
         """Определение паттернов в истории оптимизации"""
-        trajectories = [
-            [op.operation_type.value for n in self.history.get_lineage(node.id) for op in n.operations]
-            for node in best_nodes
-        ]
         return {
             "successful_operations": self.history.analyze_successful_operations(),
-            "common_sequences": self._find_common_subsequences(trajectories),
             "avg_path_length": GLOBAL_OPT_AVG_PATH_LENGTH
         }
         
-    def _find_common_subsequences(self, sequences: List[List[str]], min_length: int = 2) -> List[Tuple]:
-        """Поиск общих подпоследовательностей в траекториях оптимизации"""
-        counts = Counter(
-            tuple(seq[i:i+n])
-            for seq in sequences
-            for n in COMMON_SUBSEQ_LENGTHS
-            for i in range(len(seq) - n + 1)
-        )
-        return [s for s, c in counts.items() if c >= 2 and len(s) >= min_length][:TOP_COMMON_SUBSEQ]    # Топ общих подпоследовательностей  
-    
     def _analyze_stagnation(self, best_nodes: List[PromptNode]) -> Dict:
         """Анализ застоя в оптимизации"""
         if len(best_nodes) < 2:
@@ -237,7 +210,7 @@ class GlobalOptimizer:
         # Берем нижние
         threshold = np.percentile([n.selection_score() for n in all_evaluated], FAILED_PERCENTILE)
         ops = Counter(
-            op.operation_type.value
+            op.description
             for n in all_evaluated
             if n.selection_score() <= threshold
             for op in n.operations
@@ -251,21 +224,10 @@ class GlobalOptimizer:
 
     def _identify_unexplored_space(self) -> List[str]:
         """Определение неисследованных областей пространства промптов"""
-        ops = Counter(
-            op.operation_type.value
-            for n in self.history.nodes.values()
-            for op in n.operations
-        )
-        unexplored = [
-            f"Consider trying {op.value} operations"
-            for op in OperationType
-            if ops[op.value] < MIN_OPERATION_USAGE
-        ]
-
+        unexplored = []
         sources = Counter(n.source.value for n in self.history.nodes.values())
         if sources[OptimizationSource.GLOBAL.value] < MIN_GLOBAL_SOURCE_USAGE:
             unexplored.append("Need more global structural changes")
-
         return unexplored
 
     def _generate_global_strategies(self, history_analysis: Dict) -> List[Dict]:
@@ -290,18 +252,16 @@ class GlobalOptimizer:
         """Применение стратегий и создание глобальных кандидатов"""
         candidates = []
         for strategy in strategies:
-            handler = self._strategy_dispatch.get(strategy["type"], self.editor.apply_generic_strategy)
-
             for variant_idx in range(GLOBAL_CANDIDATES):
                 variation_id = variant_idx + 1 if GLOBAL_CANDIDATES > 1 else None
                 strategy_payload = dict(strategy)
                 if variation_id is not None:
                     strategy_payload["variant_id"] = variation_id
 
-                node = handler(strategy_payload, history_analysis, current_generation, variation_id=variation_id)
+                node = self.editor.apply_strategy(strategy_payload, history_analysis, current_generation, variation_id=variation_id)
                 if not node:
                     if is_enabled():
-                        print(f"[diag] strategy {strategy['type']} produced no node")
+                        print(f"[diag] strategy produced no node: '{strategy.get('description', '')[:60]}'")
                     continue
 
                 # Фильтрация дубликатов по схожести
@@ -324,7 +284,7 @@ class GlobalOptimizer:
                 if is_enabled():
                     print(
                         f"[diag] global candidate accepted: node_id={node.id} "
-                        f"strategy={strategy['type']} prompt_id={prompt_id(node.prompt_text)} len={len(node.prompt_text)}"
+                        f"prompt_id={prompt_id(node.prompt_text)} len={len(node.prompt_text)}"
                     )
                 self.applied_strategies.append(
                     {"generation": current_generation, "strategy": strategy_payload, "candidate_id": node.id}
@@ -367,9 +327,9 @@ class GlobalOptimizer:
             improvement = score - previous_best_score
             
             strategy = candidate.metadata.get("global_strategy", {})
-            strategy_type = strategy.get("type", "Unknown")
+            strategy_desc = strategy.get("description", "Unknown")[:70]
             
-            print(f"\n  Strategy: {strategy_type}")
+            print(f"\n  Strategy: {strategy_desc}")
             print(f"  Score: {score:.3f} (Δ {improvement:+.3f})")
             
             if improvement >= MIN_IMPROVEMENT:
@@ -383,7 +343,7 @@ class GlobalOptimizer:
         if improvements:
             best_improvement = max(improvements, key=lambda x: x["improvement"])
             print(f"\n✓ Best global improvement: {best_improvement['improvement']:.3f}")
-            print(f"  From strategy: {best_improvement['strategy'].get('type', 'Unknown')}")
+            print(f"  From strategy: {best_improvement['strategy'].get('description', 'Unknown')[:70]}")
         else:
             print("\n✗ No improvements from global step")     
     

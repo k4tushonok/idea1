@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import List
-from data_structures import Example, OperationType, TextGradient
+from data_structures import Example, TextGradient
 from typing import Dict, Optional
 
 TEMPLATES_DIR = Path(__file__).parent
@@ -23,24 +23,6 @@ class Templates:
             block += f"  Actual: {example.actual_output}\n\n"
         return block
     
-    @staticmethod    
-    def combination_guidelines(strategy: str) -> str:
-        return {
-            "best_elements": (
-                "- Extract strongest instructions\n"
-                "- Remove redundancy\n"
-                "- Produce a unified prompt"
-            ),
-            "sequential": (
-                "- Order instructions logically\n"
-                "- Merge overlapping parts"
-            ),
-            "synthesize": (
-                "- Infer common intent\n"
-                "- Create a new optimized prompt"
-            ),
-        }.get(strategy, "")   
-        
     @staticmethod
     def build_analysis_prompt(current_prompt: str, failure_examples: List[Example], success_examples: List[Example], context: Optional[Dict], max_count: int) -> str:
         """Построение промпта для LLM, который будет анализировать провалы. Шаблон загружается из prompts/analysis.txt"""
@@ -102,39 +84,10 @@ class Templates:
         return header + "\n\n" + "\n\n".join(body_parts)
     
     @staticmethod
-    def build_specific_prompt(operation_type: OperationType, current_prompt: str, content: str) -> str:
-        TEMPLATE_BY_OPERATION = {
-            OperationType.ADD_INSTRUCTION: "add_instruction",
-            OperationType.ADD_EXAMPLE: "add_example",
-            OperationType.RESTRUCTURE: "restructure",
-            OperationType.CLARIFY: "clarify",
-        }
-        
-        template_name = TEMPLATE_BY_OPERATION.get(operation_type, "overall")
+    def build_specific_prompt(template_name: str, current_prompt: str, content: str) -> str:
         template = Templates.load_template(template_name)
         return template.format(current_prompt=current_prompt, content=content)
 
-    @staticmethod
-    def build_combine_prompt(prompts: List[str], combination_strategy: str) -> str:
-        prompts_block = "\n".join(f"PROMPT {i}:\n```\n{p}\n```" for i, p in enumerate(prompts, 1))
-        template = Templates.load_template("combine")
-        combining_prompt = template.format(prompts_block=prompts_block)
-        combining_prompt += "\nGUIDELINES:\n" + Templates.combination_guidelines(combination_strategy)
-        return combining_prompt
-    
-    @staticmethod
-    def build_diversify_prompt(prompts: List[str], strategy: str) -> str:
-        best_prompts_block = ""
-        for i, prompt in enumerate(prompts[:2], 1):
-            best_prompts_block += f"\nREFERENCE PROMPT {i}:\n```\n{prompt[:300]}...\n```\n"
-        template = Templates.load_template("diversify")
-        return template.format(best_prompts_block=best_prompts_block, specific_guidance=strategy)
-    
-    @staticmethod
-    def build_simplify_prompt(prompt: str, strategy: str) -> str:
-        template = Templates.load_template("simplify")
-        return template.format(current_prompt=prompt, guidance=strategy)
-    
     @staticmethod
     def build_strategy_prompt(history_analysis: Dict) -> str:
         summary = history_analysis["summary"]

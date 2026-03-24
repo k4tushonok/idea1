@@ -1,7 +1,7 @@
 import re
 from typing import List, Dict
 from collections import defaultdict
-from data_structures import Example, TextGradient, PromptNode, EditOperation, OperationType, OptimizationSource
+from data_structures import Example, TextGradient, PromptNode, EditOperation, OptimizationSource
 from typing import Optional
 from config import MIN_PROMPT_LENGTH, DEFAULT_PRIORITY, FALLBACK_ANALYSIS_LENGTH, MIN_LIST_ITEM_LENGTH
 
@@ -15,8 +15,7 @@ SECTION_MARKERS = [
 CODE_BLOCK_RE = re.compile(r"```(?:\w+)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 PROMPT_BLOCK_RE = re.compile(r"PROMPT:\s*```(.*?)```", re.DOTALL | re.IGNORECASE)
 PROMPT_FALLBACK_RE = re.compile(r"PROMPT:\s*(.+)", re.DOTALL | re.IGNORECASE)
-CHANGES_RE = re.compile(r"CHANGES MADE:\s*(.+?)(?=OPERATION TYPE|PROMPT|$)", re.DOTALL | re.IGNORECASE)
-OPERATION_RE = re.compile(r"OPERATION TYPE:\s*(\w+)", re.IGNORECASE)
+CHANGES_RE = re.compile(r"CHANGES MADE:\s*(.+?)(?=PROMPT|$)", re.DOTALL | re.IGNORECASE)
 LIST_ITEM_RE = re.compile(r"^(?:\d+[.)]\s*|[-*•]\s+)(.+)$")
 PRIORITY_RE = re.compile(r"(?:priority|score)?\s*:?\s*([01](?:\.\d+)?)", re.IGNORECASE)
 CODE_FENCE_STRIP_RE = re.compile(r"^```.*?\n|\n```$", re.DOTALL)
@@ -145,16 +144,6 @@ class VariantParser:
         return match.group(1).strip() if match else "Edited based on gradient"
 
     @staticmethod
-    def extract_operation_type(block: str) -> OperationType:
-        match = OPERATION_RE.search(block)
-        return VariantParser.string_to_operation_type(match.group(1)) if match else OperationType.MODIFY_INSTRUCTION
-
-    @staticmethod
-    def string_to_operation_type(value: str) -> OperationType:
-        normalized = value.lower().replace(" ", "_")
-        return OperationType.__members__.get(normalized.upper(), OperationType.MODIFY_INSTRUCTION)
-
-    @staticmethod
     def parse_variants(response_text: str, original_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode]) -> List[PromptNode]:
         nodes: List[PromptNode] = []
         variant_blocks = VariantParser.split_variant_blocks(response_text)
@@ -178,7 +167,6 @@ class VariantParser:
             return None
 
         operation = EditOperation(
-            operation_type=VariantParser.extract_operation_type(block),
             description=VariantParser.extract_description(block),
             gradient_source=gradient,
             before_snippet=original_prompt + "...",
@@ -289,14 +277,12 @@ class StrategyParser:
         
         for block in strategy_blocks[1:]:
             try:
-                type_match = re.search(r'TYPE:\s*(.+?)(?=DESCRIPTION:|$)', block, re.DOTALL | re.IGNORECASE)
                 desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
                 rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
                 action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL | re.IGNORECASE)
 
-                if type_match and desc_match:
+                if desc_match:
                     strategy = {
-                        "type": preprocess_text(type_match.group(1)).upper(),
                         "description": preprocess_text(desc_match.group(1)),
                         "rationale": preprocess_text(rationale_match.group(1)) if rationale_match else "",
                         "action": preprocess_text(action_match.group(1)) if action_match else ""

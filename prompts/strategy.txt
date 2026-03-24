@@ -9,7 +9,7 @@ Current State:
 - Pareto front size: {pareto_front_size}
 
 Patterns Identified:
-- Successful operations: {successful_operations}
+- Successful changes: {successful_operations}
 - Average optimization path length: {avg_path_length:.1f}
 
 Stagnation Analysis:
@@ -44,15 +44,14 @@ Anchor each strategy in the evidence above (e.g., leverage common phrases, avoid
 TASK CONTRACT:
 - All strategies must preserve the core task the prompt is designed to perform.
 - Do not suggest strategies that change what the model is asked to do.
-- Do not mention optimizer mechanics or prompt-editing operations in SPECIFIC_ACTION.
 
 OUTPUT FORMAT:
 For each strategy, use exactly this format:
 
 STRATEGY [number]:
-TYPE: [Choose from: COMBINE, RESTRUCTURE, DIVERSIFY, SPECIALIZE, SIMPLIFY, EXPAND]
 DESCRIPTION: [One sentence explaining the strategy]
 RATIONALE: [Why this strategy should work based on the history]
-SPECIFIC_ACTION: [Concrete description of what to do]
+SPECIFIC_ACTION: [Concrete description of what to change in the prompt text]
 
 Now generate exactly 4 strategies:
+
