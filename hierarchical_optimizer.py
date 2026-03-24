@@ -10,7 +10,10 @@ from prompt_editor import PromptEditor
 from local_optimizer import LocalOptimizer
 from global_optimizer import GlobalOptimizer
 from llm.llm_client import create_llm
-from diagnostics import is_enabled, prompt_id
+from diagnostics import (
+    is_enabled, prompt_id,
+    print_population, print_timing, sources_summary, scores_summary, print_candidates_summary
+)
 from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
@@ -41,6 +44,11 @@ class HierarchicalOptimizer:
         
         # Оцениваем начальный промпт
         print("Evaluating initial prompt...")
+        if is_enabled():
+            print(
+                f"[diag] initial node: prompt_id={prompt_id(initial_prompt)} "
+                f"len={len(initial_prompt)} chars"
+            )
         initial_node = self.scorer.evaluate_node(
             initial_node,
             validation_examples,
@@ -75,11 +83,15 @@ class HierarchicalOptimizer:
             print("="*80 + "\n")
             
             generation_start_time = time.time()
+            llm_calls_gen_start = getattr(self.llm, 'total_api_calls', 0)
             
             # ЛОКАЛЬНАЯ ОПТИМИЗАЦИЯ
             
             print(f"Phase 1: Local Optimization")
             print(f"  Population size: {len(population)}")
+            if is_enabled():
+                print_population("population before local opt", population)
+                print(f"[diag] population sources: {sources_summary(population)}")
             
             new_candidates = []
             optimized_prompts_this_run: set = set()
@@ -112,6 +124,14 @@ class HierarchicalOptimizer:
                         validation_examples=validation_examples
                     )
                     
+                    delta = improved_node.selection_score() - node.selection_score()
+                    print(f"  Node {i} score: {node.selection_score():.3f} → {improved_node.selection_score():.3f} (Δ {delta:+.3f})")
+                    if is_enabled():
+                        print(
+                            f"[diag] local opt result: node_id={improved_node.id} "
+                            f"prompt_id={prompt_id(improved_node.prompt_text)} "
+                            f"score={improved_node.selection_score():.3f} delta={delta:+.3f}"
+                        )
                     new_candidates.append(improved_node)
                     
                 except Exception as e:
@@ -176,13 +196,19 @@ class HierarchicalOptimizer:
             generation_best = max(population, key=lambda n: n.selection_score())
             generation_best_score = generation_best.selection_score()
             
+            llm_calls_gen_end = getattr(self.llm, 'total_api_calls', 0)
+            llm_calls_gen_delta = llm_calls_gen_end - llm_calls_gen_start
             print(f"\n  Generation best: {generation_best_score:.3f}")
             print(f"  Overall best: {best_score:.3f}")
+            print(f"  LLM calls this generation: {llm_calls_gen_delta} (total: {llm_calls_gen_end})")
             if is_enabled():
                 print(
                     f"[diag] generation best node: node_id={generation_best.id} "
                     f"prompt_id={prompt_id(generation_best.prompt_text)}"
                 )
+                print_population(f"population after selection gen={generation}", population)
+                print(f"[diag] population sources after selection: {sources_summary(population)}")
+                print_candidates_summary(f"all new_candidates gen={generation}", new_candidates)
             
             # Проверяем улучшение
             improvement = generation_best_score - best_score
@@ -209,6 +235,8 @@ class HierarchicalOptimizer:
             self.optimization_log.append(log_entry)
             
             print(f"\n  Generation time: {generation_time:.2f}s")
+            if is_enabled():
+                print_timing(f"generation {generation}", generation_time)
             
             # EARLY STOPPING
             if generations_without_improvement >= PATIENCE:

@@ -11,7 +11,7 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 from llm.llm_response_parser import MarkdownParser
-from diagnostics import is_enabled, prompt_id, preview_text
+from diagnostics import is_enabled, prompt_id, preview_text, print_section, sources_summary, scores_summary, print_candidates_summary
 from config import (TOP_BEST_NODES,
                     MAX_DISTANCE_PAIRS,
                     COMMON_WORDS_TOP_K,
@@ -72,6 +72,23 @@ class GlobalOptimizer:
         # Шаг 1: Анализ истории оптимизации
         print("Step 1: Analyzing optimization history...")
         history_analysis = self._analyze_history()
+        if is_enabled():
+            stag = history_analysis["stagnation"]
+            div = history_analysis["diversity"]
+            failed = history_analysis["failed_directions"]
+            unexplored = history_analysis["unexplored_space"]
+            print(
+                f"[diag] history analysis: stagnant={stag['is_stagnant']} "
+                f"avg_similarity={stag['avg_similarity']:.3f} "
+                f"diversity={div['diversity_score']:.3f} "
+                f"needs_diversification={div['needs_diversification']}"
+            )
+            if failed:
+                print(f"[diag] failed_directions ({len(failed)}): {'; '.join(failed[:3])}")
+            if unexplored:
+                print(f"[diag] unexplored_space: {'; '.join(unexplored[:3])}")
+            best_els = history_analysis["best_elements"]["top_scores"]
+            print(f"[diag] top_{len(best_els)}_scores: {scores_summary(best_els)}")
         
         # Шаг 2: Генерация кандидатов через мета-оптимизатор (история → LLM → новая инструкция)
         print("\nStep 2: Generating candidates via meta-optimizer...")
@@ -110,6 +127,11 @@ class GlobalOptimizer:
         print(f"\nCompleted in {time.time() - start_time:.2f}s")
 
         self.total_global_steps += 1
+
+        if is_enabled():
+            print_candidates_summary(f"global evaluated candidates gen={current_generation}", evaluated_candidates)
+            if valid_for_refinement:
+                print_candidates_summary("global valid_for_refinement", valid_for_refinement)
 
         if not valid_for_refinement:
             print("[diag] All global candidates have zero accuracy — skipping refinement")
@@ -479,12 +501,16 @@ class GlobalOptimizer:
         """Определение, нужно ли запускать глобальный шаг"""
         # Триггер 1: Регулярный интервал
         if current_generation % GLOBAL_TRIGGER_INTERVAL == 0:
+            if is_enabled():
+                print(f"[diag] global trigger: interval (gen={current_generation} % {GLOBAL_TRIGGER_INTERVAL} == 0)")
             return True
         
         # Триггер 2: Обнаружен застой
         stagnation_info = self.history.get_stagnation_info()
         if stagnation_info["is_stagnant"]:
             print("Global step triggered by stagnation")
+            if is_enabled():
+                print(f"[diag] stagnation info: {stagnation_info}")
             return True
         
         # Триггер 3: Низкое разнообразие
@@ -496,7 +522,11 @@ class GlobalOptimizer:
                     distances.append(self.scorer.calculate_edit_distance(current_gen_nodes[i].prompt_text, current_gen_nodes[j].prompt_text))
             if distances and np.mean(distances) < LOW_DIVERSITY_THRESHOLD:
                 print("Global step triggered by low diversity")
+                if is_enabled():
+                    print(f"[diag] diversity trigger: avg_distance={np.mean(distances):.3f} < threshold={LOW_DIVERSITY_THRESHOLD}")
                 return True
+            elif is_enabled():
+                print(f"[diag] global diversity check: avg_distance={np.mean(distances):.3f} (threshold={LOW_DIVERSITY_THRESHOLD}) — no trigger")
             
         return False
     

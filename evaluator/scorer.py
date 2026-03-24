@@ -3,7 +3,7 @@ from evaluator.metrics import MetricEvaluator, AccuracyMetric, F1ScoreMetric, Sa
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
-from diagnostics import is_enabled, print_metrics, print_prompt
+from diagnostics import is_enabled, print_metrics, print_prompt, scores_summary
 from functools import lru_cache
 import random
 from tqdm import tqdm
@@ -129,7 +129,11 @@ class PromptScorer:
                     execute: bool = True, sample: bool = True,
                     seed_offset: int = 0) -> Metrics:
         if is_enabled():
-            print(f"[diag] evaluate_prompt: execute={execute} sample={sample} incoming_examples={len(examples)}")
+            print(
+                f"[diag] evaluate_prompt: execute={execute} sample={sample} "
+                f"incoming={len(examples)} "
+                f"will_use={min(len(examples), self.max_examples_per_node) if sample else len(examples)}"
+            )
         if sample:
             eval_examples = self._sample_examples(examples, seed_offset)
         else:
@@ -157,6 +161,10 @@ class PromptScorer:
                 metrics.metrics[name] = float(score)
         if is_enabled():
             print_metrics("evaluate_prompt", metrics)
+            per_metric_str = ", ".join(
+                f"{name}={val:.3f}" for name, val in sorted(metrics.metrics.items())
+            )
+            print(f"[diag] per-metric breakdown: {per_metric_str}")
 
         return metrics
 
@@ -186,7 +194,11 @@ class PromptScorer:
         node.evaluation_examples = { "success": successes, "failures": failures }
         node.evaluation_examples_by_split[split] = { "success": successes, "failures": failures }
         if is_enabled():
-            print(f"[diag] evaluate_node results: success={len(successes)} failures={len(failures)}")
+            print(
+                f"[diag] evaluate_node results: success={len(successes)} failures={len(failures)} "
+                f"total={len(successes) + len(failures)} "
+                f"composite={metrics.composite_score():.3f} accuracy={metrics.metrics.get('accuracy', 0.0):.3f}"
+            )
         return node
     
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:

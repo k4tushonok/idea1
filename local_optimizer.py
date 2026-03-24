@@ -6,7 +6,7 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from text_gradient_generator import TextGradientGenerator
 from prompt_editor import PromptEditor
-from diagnostics import is_enabled, prompt_id, preview_text
+from diagnostics import is_enabled, prompt_id, preview_text, print_population, print_timing, scores_summary
 from config import (
     LOCAL_ITERATIONS_PER_GENERATION,
     MIN_IMPROVEMENT,
@@ -65,7 +65,9 @@ class LocalOptimizer:
             iteration_start_time = time.time()
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
-            print(f"\n--- Iteration {iteration + 1} ---")
+            print(f"\n--- Iteration {iteration + 1}/{LOCAL_ITERATIONS_PER_GENERATION} (no_improve={no_improve_iters}/{PATIENCE}) ---")
+            if is_enabled():
+                print_population(f"beam state iter={iteration + 1}", current_beam)
                 
             # Берём топ-кандидатов из beam как родителей
             parents = sorted(current_beam, key=lambda n: n.selection_score(), reverse=True)
@@ -134,6 +136,11 @@ class LocalOptimizer:
                 candidate_score = best_candidate.selection_score()
                 improvement = candidate_score - best_score
                 print(f"Best candidate score: {candidate_score:.3f} (Δ {improvement:+.3f})")
+                if is_enabled():
+                    beam_scores = [n.selection_score() for n in current_beam]
+                    print(f"[diag] updated beam scores: {scores_summary(beam_scores)}")
+                    eval_scores = sorted([n.selection_score() for n in eligible_candidates], reverse=True)
+                    print(f"[diag] eligible candidates scores: {scores_summary(eval_scores)}")
 
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
                     print(f"✓ Improvement found! Updating beam")
@@ -157,12 +164,16 @@ class LocalOptimizer:
                 "llm_calls": calls_delta
             })
             print(f"Iteration time: {iteration_time:.2f}s — LLM calls: {calls_delta} (total: {calls_after})")
+            if is_enabled():
+                print_timing(f"local iteration {iteration + 1}", iteration_time)
             
             self.total_iterations += 1
             
             # Early stopping
             if no_improve_iters >= PATIENCE:
                 print(f"\nEarly stopping after {no_improve_iters} iterations without improvement")
+                if is_enabled():
+                    print_population("beam at early stop", current_beam)
                 break
         
         print(f"\n{'='*60}")
