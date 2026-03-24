@@ -152,6 +152,33 @@ class Templates:
         return prompt
     
     @staticmethod
+    def build_meta_optimizer_prompt(history_nodes: List, best_node, exemplars: Optional[List[Example]] = None) -> str:
+        """Мета-промпт: вся история (промпт + скор) + wrong-exemplars вставляются напрямую,
+        LLM сама генерирует следующую инструкцию."""
+        history_lines = []
+        for node in history_nodes:
+            history_lines.append(
+                f"Instruction: {node.prompt_text}\nScore: {round(node.selection_score() * 100)}"
+            )
+        history_block = "\n\n".join(history_lines)
+
+        if exemplars:
+            ex_lines = [
+                f"{i}. Question: {ex.input_text}\n   Expected answer: {ex.expected_output}"
+                for i, ex in enumerate(exemplars, 1)
+            ]
+            exemplars_block = "\n".join(ex_lines)
+        else:
+            exemplars_block = "None"
+
+        template = Templates.load_template("meta_optimizer")
+        return template.format(
+            history_block=history_block,
+            best_score=best_node.selection_score(),
+            exemplars_block=exemplars_block,
+        )
+
+    @staticmethod
     def build_editing_prompt(current_prompt: str, gradient: TextGradient, num_variants: int) -> str:
         suggestions = "\n".join(f"{i}. {s}" for i, s in enumerate(gradient.specific_suggestions, 1))
 
