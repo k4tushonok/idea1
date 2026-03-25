@@ -42,10 +42,11 @@ class BaseLLM(ABC):
             except Exception:
                 self._persistent = None
 
-    def invoke(self, prompt: str) -> str:
+    def invoke(self, prompt: str, temperature: Optional[float] = None) -> str:
         self.total_invocations += 1
 
-        key = (prompt, getattr(self, "model", None), TEMPERATURE, MAX_TOKENS)
+        effective_temp = temperature if temperature is not None else TEMPERATURE
+        key = (prompt, getattr(self, "model", None), effective_temp, MAX_TOKENS)
 
         if self._cache_enabled:
             if key in self._cache:
@@ -58,7 +59,7 @@ class BaseLLM(ABC):
                 h = hashlib.sha256()
                 h.update(prompt.encode('utf-8'))
                 h.update(str(getattr(self, 'model', '')).encode('utf-8'))
-                h.update(str(TEMPERATURE).encode('utf-8'))
+                h.update(str(effective_temp).encode('utf-8'))
                 h.update(str(MAX_TOKENS).encode('utf-8'))
                 cache_key = h.hexdigest()
                 cached = self._persistent.get(cache_key, ttl=int(CACHE_TTL_SECONDS))
@@ -73,7 +74,7 @@ class BaseLLM(ABC):
                 print("Persistent LLM cache retrieval failed")
                 pass
 
-        result = self._generate(prompt)
+        result = self._generate(prompt, temperature=effective_temp)
         self.total_api_calls += 1
 
         if self._persistent_enabled and self._persistent and cache_key is not None:
@@ -94,7 +95,7 @@ class BaseLLM(ABC):
         return result
         
     @abstractmethod
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
         pass
 
 class SQLiteCache:
@@ -157,7 +158,7 @@ class LocalQwenModel(BaseLLM):
         )
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
         messages = [
             {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
             {"role": "user", "content": prompt}
@@ -186,12 +187,12 @@ class OpenAILLM(BaseLLM):
         self.client = OpenAI(api_key=API_KEY)
         self.model = MODEL
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_completion_tokens=MAX_TOKENS,
-            temperature=TEMPERATURE
+            temperature=temperature
         )
         return response.choices[0].message.content
 
@@ -201,9 +202,9 @@ class GeminiLLM(BaseLLM):
         self.client = genai.Client(api_key=API_KEY)
         self.model = MODEL
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
         config = genai_types.GenerateContentConfig(
-            temperature=TEMPERATURE,
+            temperature=temperature,
             max_output_tokens=MAX_TOKENS,
         )
         response = self.client.models.generate_content(

@@ -6,7 +6,7 @@ LOCAL_BATCH_SIZE: int = 20               # Максимальное число f
 LOCAL_MAX_EXAMPLES: int = 15             # Максимальное число примеров, передаваемых в один LLM вызов
 LOCAL_PARENTS_PER_ITERATION: int = 3     # Сколько лучших узлов поколения использовать как "родителей" для генерации новых кандидатов
 GLOBAL_CANDIDATES: int = 4               # Ширина глобального поиска
-GLOBAL_TRIGGER_INTERVAL: int = 1         # Каждые N поколений
+GLOBAL_TRIGGER_INTERVAL: int = 2         # Каждые N поколений
 GLOBAL_HISTORY_WINDOW: int = 15          # Сколько узлов истории анализировать
 MAX_GENERATIONS: int = 2                 # Максимальное число поколений
 POPULATION_SIZE: int = 3                 # Сколько промптов держим в активном пуле
@@ -68,18 +68,20 @@ HISTORY_SCORE_THRESHOLD: float = 0.4     # 0.0 — все инструкции; 
 # "constant"                   — фиксированная случайная выборка, seed=0 (всегда одинакова)
 EXEMPLAR_SELECTION_STRATEGY: str = "accumulative_most_frequent"
 MINI_BATCH_RATIO: float = 0.2            # Доля валидационных примеров для предварительного отбора
-PRE_SCREEN_TOP_K: int = 4                # Сколько кандидатов полностью оценивать после предварительного отбора
+PRE_SCREEN_TOP_K: int = 3                # Сколько кандидатов полностью оценивать после предварительного отбора
 GRADIENT_MOMENTUM: float = 0.3           # Вес исторического импульса успешных градиентов
 CROSSOVER_CANDIDATES: int = 2            # Количество кандидатов-кроссоверов на глобальный шаг
 DIVERSITY_WEIGHT: float = 0.08           # Вес бонуса за разнообразие при отборе beam/популяции (для устойчивости к коллапсу beam)
 MAX_GRADIENT_PAIRS: int = 8              # Макс. накопленных пар градиент-родитель за одну локальную итерацию
-GLOBAL_QUALITY_GATE_TOLERANCE: float = 0.90 # Допуск порога качества для глобального исследования (доля от базовой точности)
-
+GLOBAL_QUALITY_GATE_TOLERANCE: float = 0.95 # Допуск порога качества для глобального исследования
+GLOBAL_REFINE_WITH_LOCAL: bool = False   # Следует ли проводить локальную проверку глобальных кандидатов
+GLOBAL_PRESCREEN_GATE: float = 0.85      # Глобальные кандидаты должны набрать >= этой доли от лучшего, чтобы быть сохраненными
+GLOBAL_OPTIMIZER_TEMPERATURE: float = 1.0 # Температура LLM для глобального оптимизатора
 # Веса метрик для оценки промптов
 METRIC_WEIGHTS: Dict[str, float] = {
-    "accuracy": 0.65,
-    "safety": 0.02,
-    "robustness": 0.05,
-    "efficiency": 0.03,
-    "f1": 0.25,
+    "accuracy": 0.68,
+    "safety": 0.01,
+    "robustness": 0.03,
+    "efficiency": 0.01,
+    "f1": 0.27,
 }

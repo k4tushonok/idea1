@@ -195,7 +195,6 @@ class LocalOptimizer:
             if len(eligible_candidates) != len(evaluated_candidates):
                 print(
                     f"Filtered out {len(evaluated_candidates) - len(eligible_candidates)} candidates "
-                    f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
                 )
             
             if eligible_candidates:

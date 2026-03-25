@@ -35,7 +35,10 @@ from config import (TOP_BEST_NODES,
                     HISTORY_SCORE_THRESHOLD,
                     EXEMPLAR_SELECTION_STRATEGY,
                     CROSSOVER_CANDIDATES,
-                    GLOBAL_QUALITY_GATE_TOLERANCE)
+                    GLOBAL_QUALITY_GATE_TOLERANCE,
+                    MINI_BATCH_RATIO,
+                    GLOBAL_PRESCREEN_GATE,
+                    GLOBAL_OPTIMIZER_TEMPERATURE)
     
 class GlobalOptimizer:
     def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
@@ -112,9 +115,18 @@ class GlobalOptimizer:
         print(f"Created {len(candidates)} total candidates (meta={len(candidates) - len(crossover_candidates)}, crossover={len(crossover_candidates)})")
         self.total_candidates_generated += len(candidates)
 
-        # Шаг 3: Оценка кандидатов
-        print("\nStep 3: Evaluating global candidates...")
-        evaluated_candidates = self._evaluate_global_candidates(candidates, validation_examples)
+        # Шаг 3: Pre-screen on mini-batch, then full evaluate only promising candidates
+        print("\nStep 3: Pre-screening global candidates on mini-batch...")
+        mini_batch = self._create_mini_batch(validation_examples)
+        prescreened = self._prescreen_global_candidates(candidates, mini_batch, history_analysis)
+        
+        if not prescreened:
+            print("All global candidates filtered by pre-screen — skipping full evaluation")
+            self.total_global_steps += 1
+            return []
+        
+        print(f"\nStep 3b: Full evaluation of {len(prescreened)}/{len(candidates)} pre-screened candidates...")
+        evaluated_candidates = self._evaluate_global_candidates(prescreened, validation_examples)
         baseline_accuracy = 0.0
         best_node = history_analysis.get("best_node")
         if best_node and best_node.is_evaluated:
@@ -131,7 +143,6 @@ class GlobalOptimizer:
         if len(valid_for_refinement) != len(evaluated_candidates):
             print(
                 f"Filtered out {len(evaluated_candidates) - len(valid_for_refinement)} global candidates "
-                f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
             )
 
         # Анализируем только допустимых кандидатов
@@ -400,11 +411,8 @@ class GlobalOptimizer:
         candidates = []
         for i in range(GLOBAL_CANDIDATES):
             prompt = meta_prompt
-            if GLOBAL_CANDIDATES > 1:
-                prompt = f"{meta_prompt}\n\nGenerate variation {i + 1} of {GLOBAL_CANDIDATES}."
             try:
-                raw = self._cache.get(prompt) or self.llm.invoke(prompt=prompt)
-                self._cache[prompt] = raw
+                raw = self.llm.invoke(prompt=prompt, temperature=GLOBAL_OPTIMIZER_TEMPERATURE)
                 # Извлекаем текст из тегов <INS>...</INS>; fallback — нормализация Markdown
                 if "<INS>" in raw and "</INS>" in raw:
                     new_text = raw[raw.index("<INS>") + len("<INS>"):raw.index("</INS>")].strip()
@@ -495,7 +503,7 @@ class GlobalOptimizer:
             crossover_prompt = Templates.build_crossover_prompt(parent_a, parent_b)
             
             try:
-                raw = self.llm.invoke(prompt=crossover_prompt)
+                raw = self.llm.invoke(prompt=crossover_prompt, temperature=GLOBAL_OPTIMIZER_TEMPERATURE)
                 
                 if "<INS>" in raw and "</INS>" in raw:
                     new_text = raw[raw.index("<INS>") + len("<INS>"):raw.index("</INS>")].strip()
@@ -562,6 +570,40 @@ class GlobalOptimizer:
         
         return candidates
     
+    def _create_mini_batch(self, validation_examples: List[Example]) -> List[Example]:
+        import random as rng_module
+        mini_size = max(5, int(len(validation_examples) * MINI_BATCH_RATIO))
+        if mini_size >= len(validation_examples):
+            return validation_examples
+        rng = rng_module.Random(42)
+        indices = sorted(rng.sample(range(len(validation_examples)), mini_size))
+        return [validation_examples[i] for i in indices]
+    
+    def _prescreen_global_candidates(self, candidates: List[PromptNode], mini_batch: List[Example], history_analysis: Dict) -> List[PromptNode]:
+        best_node = history_analysis.get("best_node")
+        gate_score = 0.0
+        if best_node and best_node.is_evaluated:
+            gate_score = best_node.selection_score() * GLOBAL_PRESCREEN_GATE
+        
+        passed = []
+        for i, candidate in enumerate(candidates, 1):
+            try:
+                metrics = self.scorer.evaluate_prompt(
+                    candidate.prompt_text, mini_batch,
+                    execute=True, sample=False
+                )
+                score = metrics.composite_score()
+                print(f"  Pre-screen global {i}/{len(candidates)}: {score:.3f} (gate={gate_score:.3f})", end="")
+                if score >= gate_score:
+                    print(" ✓ passed")
+                    passed.append(candidate)
+                else:
+                    print(" ✗ filtered")
+            except Exception as e:
+                print(f"  Pre-screen error {i}: {e}")
+        
+        print(f"Pre-screen: {len(passed)}/{len(candidates)} candidates passed gate")
+        return passed
     
     def _evaluate_global_candidates(self, candidates: List[PromptNode], validation_examples: List[Example]) -> List[PromptNode]:
         """Оценка глобальных кандидатов. Точное совпадение текста промпта → переиспользуем метрики из истории."""

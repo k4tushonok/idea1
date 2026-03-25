@@ -14,7 +14,7 @@ from diagnostics import (
     is_enabled, prompt_id,
     print_population, print_timing, sources_summary, scores_summary, print_candidates_summary
 )
-from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES, DIVERSITY_WEIGHT
+from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES, DIVERSITY_WEIGHT, GLOBAL_REFINE_WITH_LOCAL
 
 class HierarchicalOptimizer:
     def __init__(self):
@@ -114,7 +114,6 @@ class HierarchicalOptimizer:
     
                 try:
                     self.local_optimizer._evaluated_prompts.clear()
-                    self.local_optimizer._train_outcomes_cache.clear()
                     self.editor._cache.clear()
                     self.gradient_gen._cache.clear()
                     
@@ -150,31 +149,35 @@ class HierarchicalOptimizer:
                         validation_examples=validation_examples
                     )
                     
-                    # Сортируем и берём только топ
-                    global_candidates_sorted = sorted(global_candidates, key=lambda n: n.selection_score(), reverse=True)
-                    top_global = global_candidates_sorted[:2]
-                    
-                    # Локальная оптимизация для каждого глобального кандидата
-                    print(f"\nRefining {len(top_global)} global candidates with local optimization...")
-                    
-                    for i, global_candidate in enumerate(top_global, 1):
-                        print(f"\n  Refining global candidate {i}/{len(top_global)}")
-                        try:
-                            self.local_optimizer._evaluated_prompts.clear()
-                            self.local_optimizer._train_outcomes_cache.clear()
-                            self.editor._cache.clear()
-                            self.gradient_gen._cache.clear()
+                    if global_candidates:
+                        # Сортируем и берём только топ
+                        global_candidates_sorted = sorted(global_candidates, key=lambda n: n.selection_score(), reverse=True)
+                        top_global = global_candidates_sorted[:2]
+                        
+                        if GLOBAL_REFINE_WITH_LOCAL:
+                            print(f"\nRefining {len(top_global)} global candidates with local optimization...")
                             
-                            refined = self.local_optimizer.optimize(
-                                starting_node=global_candidate,
-                                train_examples=train_examples,
-                                validation_examples=validation_examples
-                            )
-                            new_candidates.append(refined)
-                            
-                        except Exception as e:
-                            print(f"    Error refining: {e}")
-                            new_candidates.append(global_candidate)
+                            for i, global_candidate in enumerate(top_global, 1):
+                                print(f"\n  Refining global candidate {i}/{len(top_global)}")
+                                try:
+                                    self.local_optimizer._evaluated_prompts.clear()
+                                    self.local_optimizer._train_outcomes_cache.clear()
+                                    self.editor._cache.clear()
+                                    self.gradient_gen._cache.clear()
+                                    
+                                    refined = self.local_optimizer.optimize(
+                                        starting_node=global_candidate,
+                                        train_examples=train_examples,
+                                        validation_examples=validation_examples
+                                    )
+                                    new_candidates.append(refined)
+                                    
+                                except Exception as e:
+                                    print(f"    Error refining: {e}")
+                                    new_candidates.append(global_candidate)
+                        else:
+                            print(f"\nInjecting {len(top_global)} global candidates into population (no local refinement)")
+                            new_candidates.extend(top_global)
                     
                 except Exception as e:
                     print(f"Error in global optimization: {e}")
