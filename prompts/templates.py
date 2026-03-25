@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import List
-from data_structures import Example, TextGradient
+from data_structures import Example, TextGradient, PromptNode
 from typing import Dict, Optional
 
 TEMPLATES_DIR = Path(__file__).parent
@@ -63,25 +63,32 @@ class Templates:
         return template.format(current_prompt=current_prompt, hard_negatives_block=hard_negatives_block, hard_positives_block=hard_positives_block)
         
     @staticmethod
-    def build_gradients_batch_prompt(batches: list, cluster_names: list, success_examples: List[Example], max_count: int) -> str:
+    def build_gradients_batch_prompt(current_prompt: str, batches: list, cluster_names: list, success_examples: List[Example], max_count: int) -> str:
         # Инструкция: вернуть N градиентов, каждый с наборами секций
         header = (
-            f"You are an assistant for prompt optimization. Generate {len(batches)} separate gradient analyses, one per cluster. "
+            f"You are an expert prompt engineer analyzing why a prompt fails on certain examples. "
+            f"Generate {len(batches)} separate gradient analyses, one per cluster of failures. "
             "For each cluster listed below, produce a block starting with a header in the format: '### GRADIENT <i> - <cluster_name>' (i starting at 1). "                
             "Each block must contain the following sections exactly: '## ERROR ANALYSIS', '## SUGGESTED DIRECTION', "
             "'## SPECIFIC SUGGESTIONS' (a numbered list), and '## PRIORITY' (a number from 0.0 to 1.0). "
-            "Return the blocks in the same order as the clusters and avoid extra commentary."
+            "Return the blocks in the same order as the clusters and avoid extra commentary.\n\n"
+            "CRITICAL: Prefer high-impact structural changes (restructure order, add constraints, change formatting) over tiny wording tweaks.\n"
+            "Do NOT suggest copying specific values from examples into the prompt."
         )
+        
+        prompt_block = f"\nCURRENT PROMPT BEING ANALYZED:\n```\n{current_prompt}\n```\n"
         
         # Собираем блоки с провалами/успехами
         body_parts = []
         for i, batch_failures in enumerate(batches, start=1):
             cluster_name = cluster_names[i - 1]
             failure_block = Templates.format_examples(batch_failures, max_count=max_count)
-            success_section = Templates.format_examples(success_examples[:5], max_count=5) if success_examples else ""
-            body_parts.append(f"--- CLUSTER: {cluster_name} (SET {i}) ---\n{failure_block}{success_section}")
+            success_section = ""
+            if success_examples:
+                success_section = f"\nSUCCESS EXAMPLES (where the prompt worked correctly):\n{Templates.format_examples(success_examples[:5], max_count=5)}"
+            body_parts.append(f"--- CLUSTER: {cluster_name} (SET {i}) ---\nFAILURE EXAMPLES:\n{failure_block}{success_section}")
             
-        return header + "\n\n" + "\n\n".join(body_parts)
+        return header + prompt_block + "\n\n".join(body_parts)
     
     @staticmethod
     def build_specific_prompt(template_name: str, current_prompt: str, content: str) -> str:
@@ -158,7 +165,7 @@ class Templates:
         history_lines = []
         for node in history_nodes:
             history_lines.append(
-                f"Instruction: {node.prompt_text}\nScore: {round(node.selection_score() * 100)}"
+                f"Instruction: {node.prompt_text}\nScore: {node.selection_score() * 100:.2f}"
             )
         history_block = "\n\n".join(history_lines)
 
@@ -206,4 +213,15 @@ class Templates:
             suggested_direction=gradient.suggested_direction,
             specific_suggestions_block=suggestions,
             num_variants=num_variants
+        )
+
+    @staticmethod
+    def build_crossover_prompt(node_a: 'PromptNode', node_b: 'PromptNode') -> str:
+        """Построение промпта кроссовера, комбинирующего лучшие элементы двух топовых промптов."""
+        template = Templates.load_template("crossover")
+        return template.format(
+            prompt_a=node_a.prompt_text,
+            score_a=f"{node_a.selection_score():.3f}",
+            prompt_b=node_b.prompt_text,
+            score_b=f"{node_b.selection_score():.3f}",
         )

@@ -33,7 +33,9 @@ from config import (TOP_BEST_NODES,
                     GLOBAL_HISTORY_WINDOW,
                     EXEMPLAR_COUNT,
                     HISTORY_SCORE_THRESHOLD,
-                    EXEMPLAR_SELECTION_STRATEGY)
+                    EXEMPLAR_SELECTION_STRATEGY,
+                    CROSSOVER_CANDIDATES,
+                    GLOBAL_QUALITY_GATE_TOLERANCE)
     
 class GlobalOptimizer:
     def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
@@ -100,7 +102,14 @@ class GlobalOptimizer:
             print(f"[diag] wrong-exemplars selected={len(exemplars)}")
         candidates = self._generate_candidates_from_history(history_analysis, current_generation, exemplars)
         
-        print(f"Created {len(candidates)} candidates")
+        # Генерация кандидатов-кроссоверов из лучших промптов
+        print("\nStep 2b: Generating crossover candidates...")
+        crossover_candidates = self._generate_crossover_candidates(history_analysis, current_generation)
+        if crossover_candidates:
+            candidates.extend(crossover_candidates)
+            print(f"Added {len(crossover_candidates)} crossover candidates")
+        
+        print(f"Created {len(candidates)} total candidates (meta={len(candidates) - len(crossover_candidates)}, crossover={len(crossover_candidates)})")
         self.total_candidates_generated += len(candidates)
 
         # Шаг 3: Оценка кандидатов
@@ -109,12 +118,15 @@ class GlobalOptimizer:
         baseline_accuracy = 0.0
         best_node = history_analysis.get("best_node")
         if best_node and best_node.is_evaluated:
-            baseline_accuracy = best_node.selection_accuracy()
+            # Используем допуск для глобального исследования: допускаем кандидатов в пределах GLOBAL_QUALITY_GATE_TOLERANCE от лучшей точности. 
+            baseline_accuracy = best_node.selection_accuracy() * GLOBAL_QUALITY_GATE_TOLERANCE
 
-        # Фильтруем до анализа
+        # Фильтруем до анализа — также проверяем композитную оценку
+        best_composite = best_node.selection_score() * GLOBAL_QUALITY_GATE_TOLERANCE if best_node and best_node.is_evaluated else 0.0
         valid_for_refinement = [
             c for c in evaluated_candidates
-            if c.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
+            if (c.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
+                or c.metrics.composite_score() >= best_composite)
         ]
         if len(valid_for_refinement) != len(evaluated_candidates):
             print(
@@ -452,6 +464,102 @@ class GlobalOptimizer:
                     f"prompt_id={prompt_id(new_text)} len={len(new_text)}"
                 )
 
+        return candidates
+    
+    def _generate_crossover_candidates(self, history_analysis: Dict, current_generation: int) -> List[PromptNode]:
+        """Комбинирование лучших элементов из топовых промптов.
+        
+        Берёт пары высокооценочных промптов и просит LLM создать новый промпт,
+        наследующий сильные стороны обоих родителей и разрешающий конфликты.
+        """
+        best_nodes = history_analysis["best_elements"]["prompts"]
+        if len(best_nodes) < 2:
+            if is_enabled():
+                print("[diag] crossover skipped: need at least 2 best nodes")
+            return []
+        
+        candidates = []
+        num_pairs = min(CROSSOVER_CANDIDATES, len(best_nodes) - 1)
+        
+        for i in range(num_pairs):
+            parent_a = best_nodes[i]
+            parent_b = best_nodes[i + 1]
+            
+            # Пропускаем, если родители слишком похожи (кроссовер был бы избыточным)
+            similarity = 1.0 - self.scorer.calculate_edit_distance(parent_a.prompt_text, parent_b.prompt_text)
+            if similarity > SIMILARITY_THRESHOLD:
+                if is_enabled():
+                    print(f"[diag] crossover pair {i+1} skipped: similarity={similarity:.3f} > threshold")
+                continue
+            
+            crossover_prompt = Templates.build_crossover_prompt(parent_a, parent_b)
+            
+            try:
+                raw = self.llm.invoke(prompt=crossover_prompt)
+                
+                if "<INS>" in raw and "</INS>" in raw:
+                    new_text = raw[raw.index("<INS>") + len("<INS>"):raw.index("</INS>")].strip()
+                else:
+                    new_text = MarkdownParser.normalize_prompt_text(raw)
+                
+                # Пропускаем артефакты извлечения
+                if "INS" in new_text:
+                    if is_enabled():
+                        print(f"[diag] crossover candidate skipped: contains 'INS' artifact")
+                    continue
+                
+                # Проверка дедупликации
+                text_hash = hashlib.md5(new_text.encode()).hexdigest()
+                if text_hash in self._seen_prompt_hashes:
+                    if is_enabled():
+                        print(f"[diag] crossover exact-duplicate skipped")
+                    continue
+                
+                # Проверка похожести с существующими кандидатами
+                is_duplicate = False
+                for c in candidates:
+                    sim = 1.0 - self.scorer.calculate_edit_distance(new_text, c.prompt_text)
+                    if sim > SIMILARITY_THRESHOLD:
+                        is_duplicate = True
+                        break
+                if is_duplicate:
+                    continue
+                
+                self._seen_prompt_hashes.add(text_hash)
+                
+                operation = EditOperation(
+                    description=f"Crossover (gen {current_generation}): top-{i+1} x top-{i+2}",
+                    before_snippet=f"A({parent_a.selection_score():.3f}): {parent_a.prompt_text[:60]}... + B({parent_b.selection_score():.3f}): {parent_b.prompt_text[:60]}...",
+                    after_snippet=new_text[:100] + "..."
+                )
+                strategy_meta = {
+                    "description": "crossover",
+                    "action": f"crossover of top-{i+1} (score={parent_a.selection_score():.3f}) and top-{i+2} (score={parent_b.selection_score():.3f})"
+                }
+                node = PromptNode(
+                    prompt_text=new_text,
+                    parent_id=parent_a.id,
+                    generation=current_generation,
+                    source=OptimizationSource.GLOBAL,
+                    operations=[operation],
+                    metadata={"global_strategy": strategy_meta}
+                )
+                candidates.append(node)
+                self.applied_strategies.append({
+                    "generation": current_generation,
+                    "strategy": strategy_meta,
+                    "candidate_id": node.id
+                })
+                
+                if is_enabled():
+                    print(
+                        f"[diag] crossover candidate accepted: node_id={node.id} "
+                        f"prompt_id={prompt_id(new_text)} len={len(new_text)}"
+                    )
+                    
+            except Exception as e:
+                print(f"    Error generating crossover candidate {i+1}: {e}")
+        
         return candidates
     
     

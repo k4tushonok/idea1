@@ -7,12 +7,14 @@ You are an expert prompt engineer. Your task is to improve a prompt based on ana
 ## FAILURE EXAMPLES (what the current prompt produces incorrectly):
 {failures_block}
 
-CRITICAL: Do NOT copy specific values, titles, names, numbers, or entities
-from these examples into the prompt text. Examples are for analysis only.
-The prompt must work on any input, not on these specific cases.
-CRITICAL 2: The output must be a prompt FOR the language model performing the task,
-not a description of how to edit a prompt. Write what the model should DO,
-not what you are changing.
+CRITICAL RULES:
+1. Do NOT copy specific values, titles, names, numbers, or entities from these examples into the prompt text.
+   Examples are for analysis only. The prompt must generalize to any input.
+2. The output must be a prompt FOR the language model performing the task,
+   not a description of how to edit a prompt. Write what the model should DO.
+3. Keep the improved prompt concise. Do NOT bloat it with redundant instructions.
+   A well-structured short prompt beats a long unfocused one.
+4. Preserve any output format requirements from the current prompt.
 
 ## ANALYSIS OF PROBLEMS:
 {error_analysis}
@@ -27,13 +29,13 @@ not what you are changing.
 Generate {num_variants} improved versions of the prompt that address the problems identified above.
 
 ## REQUIREMENTS:
-1. Variants should be different.
-2. Each variant should be a COMPLETE, FUNCTIONAL prompt
-3. Make variants AS DIVERSE AS POSSIBLE in structure, wording and approach
-4. Focus on being concrete and specific in instructions
-5. Do NOT inject domain-specific content...
-6. Consider adding examples, constraints, or clarifications where needed
-7. Inside each PROMPT code block, start directly with the prompt text
+1. Each variant must be STRUCTURALLY DIFFERENT — not just reworded
+2. Each variant must be a COMPLETE, FUNCTIONAL prompt
+3. Focus on high-impact structural changes: reordering, adding constraints, changing format
+4. Do NOT inject domain-specific content or example-specific facts
+5. Consider adding step-by-step reasoning cues, output format constraints, or disambiguation rules
+6. Inside each PROMPT code block, start directly with the prompt text
+7. The improved prompt should be similar in length to the original (±50%). Avoid bloat.
 
 ## OUTPUT FORMAT:
 For each variant, use this exact format:

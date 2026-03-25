@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional, Set, Tuple
 from copy import deepcopy
 import time
+import random
 from data_structures import Example, PromptNode, TextGradient
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
@@ -16,7 +17,12 @@ from config import (
     MIN_EXAMPLES_FOR_CONTRASTIVE,
     PATIENCE,
     SIMILARITY_THRESHOLD,
-    LOCAL_PARENTS_PER_ITERATION
+    LOCAL_PARENTS_PER_ITERATION,
+    MINI_BATCH_RATIO,
+    PRE_SCREEN_TOP_K,
+    GRADIENT_MOMENTUM,
+    DIVERSITY_WEIGHT,
+    MAX_GRADIENT_PAIRS,
 )
 
 
@@ -36,6 +42,12 @@ class LocalOptimizer:
         self._train_outcomes_cache: Dict[str, Tuple] = {}
         self._evaluated_prompts: Set[str] = set()
         self.llm = llm
+        
+        # Отслеживание импульса градиентов
+        # Какие направления градиентов исторически приводили к улучшениям
+        self._momentum_buffer: Dict[str, float] = {}
+        # Адаптивный масштаб шага: увеличивается при стагнации, уменьшается при улучшении
+        self._step_scale: float = 1.0
     
     def optimize(self, starting_node: PromptNode, train_examples: List[Example], validation_examples: List[Example]) -> PromptNode:
         print(f"\n{'='*60}")
@@ -58,9 +70,11 @@ class LocalOptimizer:
         best_score = starting_node.selection_score()
         best_accuracy = starting_node.selection_accuracy()
         no_improve_iters = 0
-        prev_real_rate = 1.0
         
-        # Основной цикл оптимизации
+        # Создаём мини-батч для быстрой предварительной фильтрации кандидатов
+        mini_batch = self._create_mini_batch(validation_examples)
+        print(f"Pre-screening mini-batch: {len(mini_batch)}/{len(validation_examples)} examples")
+        
         for iteration in range(LOCAL_ITERATIONS_PER_GENERATION):
             iteration_start_time = time.time()
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
@@ -76,7 +90,12 @@ class LocalOptimizer:
             
             print(f"Generating from {len(parents)} parents...")
             
-            all_candidates: List[PromptNode] = []
+            # ================================================================
+            # ФАЗА 1: НАКОПЛЕНИЕ ГРАДИЕНТОВ
+            # Собираем градиенты со ВСЕХ родителей, применяем импульсный бонус,
+            # затем сортируем и выбираем наиболее перспективные направления.
+            # ================================================================
+            gradient_parent_pairs: List[Tuple[PromptNode, TextGradient]] = []
             
             for p_idx, parent in enumerate(parents, 1):
                 print(f"  Parent {p_idx}/{len(parents)} (score={parent.selection_score():.3f})")
@@ -86,52 +105,108 @@ class LocalOptimizer:
                 if is_enabled():
                     print(f"[diag] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
                 if not failure_examples:
-                    print("No failures found - prompt is perfect on training set!")
+                    print("  No failures found - prompt is perfect on training set!")
                     continue
                 
-                # Шаг 2: Генерируем текстовые градиенты
                 gradients = self._generate_gradients(parent, failure_examples, success_examples)
                 print(f"    Generated {len(gradients)} gradients")
                 
-                # Шаг 3: Создаем варианты на основе градиентов
-                candidates = self._generate_candidates(parent, gradients)
-                print(f"    Generated {len(candidates)} candidates")
+                # Применяем импульсный бонус на основе исторической успешности градиентов
+                for g in gradients:
+                    self._apply_momentum_boost(g)
                 
-                all_candidates.extend(candidates)
+                gradient_parent_pairs.extend((parent, g) for g in gradients)
             
-            # Дедупликация по тексту промпта
-            unique_candidates = []
-            seen = set()
-            for c in all_candidates:
-                pid = prompt_id(c.prompt_text)
-                if pid not in seen:
-                    seen.add(pid)
-                    unique_candidates.append(c)
+            if not gradient_parent_pairs:
+                print("✗ No gradients generated from any parent")
+                no_improve_iters += 1
+                self.total_iterations += 1
+                self._record_iteration_stats(iteration, iteration_start_time, calls_before)
+                continue
             
+            # Сортируем накопленные градиенты по приоритету (наивысший первым)
+            gradient_parent_pairs.sort(key=lambda pair: pair[1].priority, reverse=True)
+            top_pairs = gradient_parent_pairs[:MAX_GRADIENT_PAIRS]
+            
+            if is_enabled():
+                print(f"[diag] gradient accumulation: total={len(gradient_parent_pairs)} selected={len(top_pairs)}")
+                for i, (p, g) in enumerate(top_pairs):
+                    print(f"[diag]   gradient {i+1}: priority={g.priority:.3f} cluster={g.metadata.get('cluster', 'n/a')}")
+            
+            # ================================================================
+            # ФАЗА 2: ГЕНЕРАЦИЯ КАНДИДАТОВ
+            # Генерируем варианты из каждой топовой пары градиент-родитель
+            # ================================================================
+            all_candidates: List[PromptNode] = []
+            for parent, gradient in top_pairs:
+                try:
+                    variants = self.editor.generate_variants(parent.prompt_text, gradient, parent_node=parent)
+                    if is_enabled():
+                        print(f"[diag] variants from gradient: {len(variants)}")
+                    all_candidates.extend(variants)
+                except Exception as e:
+                    print(f"    Error generating variants: {e}")
+                    continue
+            
+            # Дедупликация между собой и относительно beam
+            unique_candidates = self._deduplicate_candidates(all_candidates, current_beam)
             print(f"Total unique candidates after dedup: {len(unique_candidates)}")
             
-            # Шаг 4: Оцениваем кандидатов
-            evaluated_candidates = self._evaluate_candidates(unique_candidates, validation_examples)
+            if not unique_candidates:
+                print("✗ No unique candidates generated")
+                no_improve_iters += 1
+                self.total_iterations += 1
+                self._record_iteration_stats(iteration, iteration_start_time, calls_before)
+                continue
+            
+            # ================================================================
+            # ФАЗА 3: ПРЕДВАРИТЕЛЬНЫЙ ОТБОР НА МИНИ-БАТЧЕ
+            # Оцениваем кандидатов сначала на маленьком подмножестве, затем
+            # полностью оцениваем только top-K.
+            # ================================================================
+            if len(unique_candidates) > PRE_SCREEN_TOP_K:
+                print(f"Pre-screening {len(unique_candidates)} candidates on mini-batch ({len(mini_batch)} examples)...")
+                pre_scores = self._pre_screen_candidates(unique_candidates, mini_batch)
+                
+                ranked = sorted(zip(unique_candidates, pre_scores), key=lambda x: x[1], reverse=True)
+                top_candidates = [c for c, s in ranked[:PRE_SCREEN_TOP_K]]
+                
+                if is_enabled():
+                    all_pre = [s for _, s in ranked]
+                    print(f"[diag] pre-screen scores: {scores_summary(all_pre)}")
+                
+                print(f"Pre-screened to top {len(top_candidates)} candidates")
+            else:
+                top_candidates = unique_candidates
+            
+            # ================================================================
+            # ФАЗА 4: ПОЛНАЯ ОЦЕНКА
+            # ================================================================
+            evaluated_candidates = self._evaluate_candidates(top_candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
-
-            # Pre-gate should compare sampled metrics to sampled metrics.
-            # Full-validation metrics are used later only for confirmation.
-            baseline_accuracy = min(n.metrics.metrics.get("accuracy", 0.0) for n in current_beam)
+            
+            # Порог качества: средняя точность beam как базовый уровень для фильтрации слабых кандидатов
+            beam_accuracies = [n.metrics.metrics.get("accuracy", 0.0) for n in current_beam]
+            baseline_accuracy = sum(beam_accuracies) / len(beam_accuracies)
             eligible_candidates = [
-                candidate for candidate in evaluated_candidates
-                if candidate.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
+                c for c in evaluated_candidates
+                if c.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
             ]
             if len(eligible_candidates) != len(evaluated_candidates):
                 print(
                     f"Filtered out {len(evaluated_candidates) - len(eligible_candidates)} candidates "
                     f"by quality gate (baseline accuracy={baseline_accuracy:.3f})"
                 )
-
+            
             if eligible_candidates:
+                # ================================================================
+                # ФАЗА 5: ОТБОР BEAM С УЧЁТОМ РАЗНООБРАЗИЯ
+                # Вместо жадного отбора добавляем небольшой бонус за разнообразие,
+                # чтобы предотвратить коллапс beam (сходимость всех промптов к одному тексту).
+                # ================================================================
                 all_for_beam = eligible_candidates + current_beam
-                all_for_beam = sorted(all_for_beam, key=lambda n: n.selection_score(), reverse=True)
+                current_beam = self._diversity_aware_select(all_for_beam, LOCAL_PARENTS_PER_ITERATION)
                 
-                current_beam = all_for_beam[:LOCAL_PARENTS_PER_ITERATION]
                 best_candidate = current_beam[0]
                 candidate_score = best_candidate.selection_score()
                 improvement = candidate_score - best_score
@@ -144,29 +219,24 @@ class LocalOptimizer:
 
                 if candidate_score + 1e-8 >= best_score + MIN_IMPROVEMENT:
                     print(f"✓ Improvement found! Updating beam")
+                    # Положительное обновление импульса для успешных направлений градиентов
+                    self._update_momentum(gradient_parent_pairs, improved=True)
                     best_score = candidate_score
                     no_improve_iters = 0
                     self.improvements_count += 1
+                    self._step_scale = max(0.5, self._step_scale * 0.9)
                 else:
                     print(f"Beam updated but no significant improvement over best")
+                    self._update_momentum(gradient_parent_pairs, improved=False)
                     no_improve_iters += 1
+                    self._step_scale = min(2.0, self._step_scale * 1.15)
             else:
                 print("✗ No valid candidates generated")
+                self._update_momentum(gradient_parent_pairs, improved=False)
                 no_improve_iters += 1
-
-            iteration_time = time.time() - iteration_start_time
-            calls_after = getattr(self.scorer.llm, 'total_api_calls', 0)
-            calls_delta = calls_after - calls_before
-            # Record iteration stats
-            self.iteration_stats.append({
-                "iteration": iteration + 1,
-                "time": iteration_time,
-                "llm_calls": calls_delta
-            })
-            print(f"Iteration time: {iteration_time:.2f}s — LLM calls: {calls_delta} (total: {calls_after})")
-            if is_enabled():
-                print_timing(f"local iteration {iteration + 1}", iteration_time)
+                self._step_scale = min(2.0, self._step_scale * 1.15)
             
+            self._record_iteration_stats(iteration, iteration_start_time, calls_before)
             self.total_iterations += 1
             
             # Early stopping
@@ -239,14 +309,14 @@ class LocalOptimizer:
             if successful_ops:
                 context["successful_operations"] = list(successful_ops.keys())[:MAX_CONTEXT_OPERATIONS]
         
-        # Опция 1: Кластеризация провалов и генерация градиентов для каждого кластера
+        # Передаём масштаб шага в контекст для адаптивной интенсивности градиента
+        context["step_scale"] = self._step_scale
+        
         if len(failure_examples) > LOCAL_BATCH_SIZE * CLUSTERING_FAILURE_MULTIPLIER:
             gradients = self.gradient_gen.generate_clustered_gradients(node, failure_examples, success_examples, context)
-        # Опция 2: Батчевая генерация градиентов
         else:
             gradients = self.gradient_gen.generate_gradients_batch(node.prompt_text, failure_examples, success_examples)
 
-        # Добавляем контрастный градиент, если есть примеры для контраста
         if len(success_examples) >= MIN_EXAMPLES_FOR_CONTRASTIVE and len(failure_examples) >= MIN_EXAMPLES_FOR_CONTRASTIVE:
             print("Generating contrastive gradient...")
             try:
@@ -284,7 +354,7 @@ class LocalOptimizer:
                 print(f"    Error generating variants: {e}")
                 continue
         
-        # Фильтруем дубликаты (по содержимому промпта)
+        # Фильтрация дубликатов
         unique: List[PromptNode] = []
         for candidate in all_candidates:
             is_duplicate = any(
@@ -296,8 +366,153 @@ class LocalOptimizer:
         print(f"  Generated {len(all_candidates)} variants, {len(unique)} unique")
         return unique
     
+ 
+    def _create_mini_batch(self, validation_examples: List[Example]) -> List[Example]:
+        """Создание детерминированного мини-батча для предварительного отбора.
+        Использует стратифицированную выборку для репрезентативного покрытия."""
+        mini_size = max(5, int(len(validation_examples) * MINI_BATCH_RATIO))
+        if mini_size >= len(validation_examples):
+            return validation_examples
+        rng = random.Random(42)
+        indices = sorted(rng.sample(range(len(validation_examples)), mini_size))
+        return [validation_examples[i] for i in indices]
+    
+    def _pre_screen_candidates(self, candidates: List[PromptNode], mini_batch: List[Example]) -> List[float]:
+        """Быстрая оценка на мини-батче для предварительного отбора.
+        Возвращает список композитных оценок, по одной на кандидата."""
+        scores = []
+        for i, candidate in enumerate(candidates):
+            try:
+                metrics = self.scorer.evaluate_prompt(
+                    candidate.prompt_text, mini_batch,
+                    execute=True, sample=False
+                )
+                score = metrics.composite_score()
+                scores.append(score)
+                print(f"  Pre-screen {i+1}/{len(candidates)}: {score:.3f}")
+            except Exception as e:
+                print(f"  Pre-screen error {i+1}: {e}")
+                scores.append(0.0)
+        return scores
+    
+    def _apply_momentum_boost(self, gradient: TextGradient):
+        """Применение импульсного бонуса к приоритету градиента на основе исторической успешности.
+        Градиенты в направлениях, которые ранее приводили к улучшениям, получают повышенный приоритет."""
+        direction_key = self._gradient_direction_key(gradient)
+        if direction_key in self._momentum_buffer:
+            momentum = self._momentum_buffer[direction_key]
+            if momentum > 0:
+                old_priority = gradient.priority
+                gradient.priority = min(1.0, gradient.priority + momentum * GRADIENT_MOMENTUM)
+                if is_enabled():
+                    print(f"[diag] momentum boost: {old_priority:.3f} -> {gradient.priority:.3f} (key={direction_key[:30]})")
+            elif momentum < -0.3:
+                # Штрафуем направления, которые стабильно проваливаются
+                gradient.priority = max(0.0, gradient.priority + momentum * 0.1)
+    
+    def _gradient_direction_key(self, gradient: TextGradient) -> str:
+        """Создание хэшируемого ключа для отслеживания направления градиента."""
+        cluster = gradient.metadata.get("cluster", "")
+        if cluster and cluster not in ("n/a", "all"):
+            return f"cluster:{cluster}"
+        gtype = gradient.metadata.get("type", "")
+        if gtype:
+            return f"type:{gtype}"
+        if gradient.specific_suggestions:
+            words = gradient.specific_suggestions[0].lower().split()[:5]
+            return f"suggestion:{' '.join(words)}"
+        return f"direction:{gradient.suggested_direction[:50]}"
+    
+    def _update_momentum(self, gradient_parent_pairs: List[Tuple], improved: bool):
+        """Обновление буфера импульса по итогам итерации.
+        Успешные направления получают положительный импульс, неуспешные — небольшой штраф."""
+        delta = 0.15 if improved else -0.05
+        for _, gradient in gradient_parent_pairs:
+            key = self._gradient_direction_key(gradient)
+            current = self._momentum_buffer.get(key, 0.0)
+            self._momentum_buffer[key] = max(-0.5, min(1.0, current + delta))
+    
+    def _deduplicate_candidates(self, candidates: List[PromptNode], beam: List[PromptNode]) -> List[PromptNode]:
+        """Дедупликация кандидатов между собой и относительно существующих членов beam."""
+        unique: List[PromptNode] = []
+        seen = set()
+        beam_pids = {prompt_id(n.prompt_text) for n in beam}
+        
+        for c in candidates:
+            pid = prompt_id(c.prompt_text)
+            if pid in seen or pid in beam_pids:
+                continue
+            is_dup = any(
+                1.0 - self.scorer.calculate_edit_distance(c.prompt_text, u.prompt_text) > SIMILARITY_THRESHOLD
+                for u in unique
+            )
+            if not is_dup:
+                seen.add(pid)
+                unique.append(c)
+        return unique
+    
+    def _diversity_aware_select(self, candidates: List[PromptNode], beam_size: int) -> List[PromptNode]:
+        """Отбор членов beam с бонусом за разнообразие для предотвращения коллапса.
+        
+        Жадный алгоритм: сначала берём абсолютно лучшего,
+        затем для остальных позиций добавляем бонус за разнообразие,
+        пропорциональный минимальному расстоянию до уже выбранных.
+        Score = selection_score + DIVERSITY_WEIGHT * min_distance_to_selected
+        """
+        if len(candidates) <= beam_size:
+            return sorted(candidates, key=lambda n: n.selection_score(), reverse=True)
+        
+        # Сначала дедупликация по тексту промпта
+        seen_pids = set()
+        deduped = []
+        for c in candidates:
+            pid = prompt_id(c.prompt_text)
+            if pid not in seen_pids:
+                seen_pids.add(pid)
+                deduped.append(c)
+        
+        candidates_sorted = sorted(deduped, key=lambda n: n.selection_score(), reverse=True)
+        selected = [candidates_sorted[0]]
+        remaining = list(candidates_sorted[1:])
+        
+        while len(selected) < beam_size and remaining:
+            best_idx = -1
+            best_combined = -float('inf')
+            
+            for i, candidate in enumerate(remaining):
+                score = candidate.selection_score()
+                min_dist = min(
+                    self.scorer.calculate_edit_distance(candidate.prompt_text, s.prompt_text)
+                    for s in selected
+                )
+                combined = score + DIVERSITY_WEIGHT * min_dist
+                if combined > best_combined:
+                    best_combined = combined
+                    best_idx = i
+            
+            if best_idx >= 0:
+                selected.append(remaining.pop(best_idx))
+            else:
+                break
+        
+        return selected
+    
+    def _record_iteration_stats(self, iteration: int, start_time: float, calls_before: int):
+        """Запись статистики для данной итерации."""
+        iteration_time = time.time() - start_time
+        calls_after = getattr(self.scorer.llm, 'total_api_calls', 0)
+        calls_delta = calls_after - calls_before
+        self.iteration_stats.append({
+            "iteration": iteration + 1,
+            "time": iteration_time,
+            "llm_calls": calls_delta
+        })
+        print(f"Iteration time: {iteration_time:.2f}s — LLM calls: {calls_delta} (total: {calls_after})")
+        if is_enabled():
+            print_timing(f"local iteration {iteration + 1}", iteration_time)
+    
     def _evaluate_candidates(self, candidates: List[PromptNode], validation_examples: List[Example]) -> List[PromptNode]:
-        """Оценка кандидатов"""
+        """Оценка кандидатов на валидационном наборе"""
         evaluated = []
         
         for i, candidate in enumerate(candidates):
@@ -339,7 +554,7 @@ class LocalOptimizer:
         return evaluated
     
     def _select_best_candidate(self, candidates: List[PromptNode]) -> Optional[PromptNode]:
-        """Выбор лучшего кандидата"""
+        """Выбор лучшего кандидата по композитной оценке"""
         if not candidates:
             return None
         
@@ -347,12 +562,14 @@ class LocalOptimizer:
         return candidates_sorted[0]
     
     def get_statistics(self) -> Dict:
-        """Статистика локальной оптимизации"""
+        """Статистика оптимизации"""
         return {
             "total_iterations": self.total_iterations,
             "improvements_count": self.improvements_count,
             "improvement_rate": self.improvements_count / max(self.total_iterations, 1),
             "iteration_stats": self.iteration_stats,
             "avg_iteration_time": (sum(s["time"] for s in self.iteration_stats) / len(self.iteration_stats)) if self.iteration_stats else None,
-            "total_llm_calls_by_local": sum(s["llm_calls"] for s in self.iteration_stats)
+            "total_llm_calls_by_local": sum(s["llm_calls"] for s in self.iteration_stats),
+            "momentum_buffer_size": len(self._momentum_buffer),
+            "step_scale": self._step_scale,
         }

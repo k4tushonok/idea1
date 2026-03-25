@@ -1,6 +1,16 @@
-Group these failures into 3-5 categories based on the type of error. For each category, provide:
+Group these failure examples into 3-5 categories based on the ROOT CAUSE of the error (not the topic or content).
+Every example must be assigned to exactly one category. Do not leave examples unassigned.
+
+Focus on error patterns such as:
+- Missing context / incomplete reasoning
+- Wrong format / output structure
+- Ambiguity in the question not handled
+- Edge case not handled (e.g., unanswerable questions)
+- Factual error vs. reasoning error
+
+For each category, provide:
 - Category name describing the root cause of the error
-- Brief description
+- Brief description of why these failures share the same root cause
 - List of example numbers that belong to this category
 
 FORMAT:

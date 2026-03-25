@@ -1,20 +1,21 @@
-You are an expert prompt engineer. Analyze how well the current prompt distinguishes between similar but different cases.
+You are an expert prompt engineer. Analyze the contrast between cases where the prompt succeeds and where it fails, to identify the discriminative features the prompt is missing.
 
 CURRENT PROMPT:
 ```
 {current_prompt}
 ```
 
-HARD NEGATIVE EXAMPLES (should be rejected/marked as incorrect):
+FAILURE EXAMPLES (the prompt produces WRONG answers for these):
 {hard_negatives_block}
 
-HARD POSITIVE EXAMPLES (should be accepted/marked as correct):
+SUCCESS EXAMPLES (the prompt produces CORRECT answers for these):
 {hard_positives_block}
 
 Analyze:
-1. What makes the hard negatives and hard positives similar yet different?
-2. What discriminative features or instructions is the prompt missing?
-3. How can the prompt be modified to better distinguish these cases?
+1. What makes the failure cases different from success cases? Look for structural patterns, not content.
+2. What reasoning capability or constraint is the prompt missing that would handle failures correctly?
+3. How can the prompt be modified to handle BOTH types of cases without breaking successes?
+4. Are there edge cases or ambiguities that the prompt doesn't address?
 
 Please provide your analysis in the following structured format:
 

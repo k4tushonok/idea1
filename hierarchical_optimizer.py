@@ -14,7 +14,7 @@ from diagnostics import (
     is_enabled, prompt_id,
     print_population, print_timing, sources_summary, scores_summary, print_candidates_summary
 )
-from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
+from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES, DIVERSITY_WEIGHT
 
 class HierarchicalOptimizer:
     def __init__(self):
@@ -286,72 +286,62 @@ class HierarchicalOptimizer:
         return self.best_node
     
     def _select_population(self, candidates: List[PromptNode], population_size: int) -> List[PromptNode]:
-        """Выбор популяции для следующего поколения"""
+        """Отбор популяции для следующего поколения с учётом разнообразия.
+        
+        Поддержание разнообразия популяции для предотвращения преждевременной сходимости.
+        Алгоритм, балансирующий оценку и структурное разнообразие.
+        """
         if len(candidates) <= population_size:
             return candidates
         
-        # Находим и сохраняем абсолютно лучшего кандидата
+        # Всегда сохраняем абсолютно лучшего кандидата
         best_candidate = max(candidates, key=lambda n: n.selection_score())
         
-        # Стратегия 1: Паретто-фронт (если есть)
+        # Члены Pareto-фронта получают приоритет
         front = self.history.get_pareto_front()
         front_ids = {node.id for node in front}
         
-        front_candidates = [c for c in candidates if c.id in front_ids]
+        # Начинаем с лучшего кандидата
+        selected = [best_candidate]
+        selected_ids = {best_candidate.id}
         
-        # Стратегия 2: Топ по композитной метрике
-        candidates_sorted = sorted(
-            candidates,
-            key=lambda n: n.selection_score(),
-            reverse=True
-        )
-        
-        # Комбинируем: берем фронт + лучших по метрике
-        selected = []
-        selected_ids = set()
-        
-        # Первым добавляем абсолютно лучшего кандидата
-        selected.append(best_candidate)
-        selected_ids.add(best_candidate.id)
-        
-        # Добавляем узлы с фронта
-        for node in front_candidates:
-            if node.id not in selected_ids and len(selected) < population_size:
+        # Добавляем членов Pareto-фронта (до половины популяции)
+        front_candidates = [c for c in candidates if c.id in front_ids and c.id not in selected_ids]
+        pareto_slots = max(1, population_size // 2)
+        for node in front_candidates[:pareto_slots]:
+            if len(selected) < population_size:
                 selected.append(node)
                 selected_ids.add(node.id)
         
-        # Дополняем лучшими по метрике
-        for node in candidates_sorted:
-            if node.id not in selected_ids and len(selected) < population_size:
-                selected.append(node)
-                selected_ids.add(node.id)
+        # Заполняем оставшиеся слоты жадным отбором с учётом разнообразия
+        # Score_combined = selection_score + DIVERSITY_WEIGHT * min_distance_to_selected
+        remaining = [c for c in candidates if c.id not in selected_ids]
+        remaining.sort(key=lambda n: n.selection_score(), reverse=True)
         
-        # Стратегия 3: Добавляем diversity если нужно
-        if len(selected) < population_size:
-            # Вычисляем разнообразие оставшихся кандидатов
-            remaining = [c for c in candidates if c.id not in selected_ids]
+        while len(selected) < population_size and remaining:
+            best_idx = -1
+            best_combined = -float('inf')
             
-            for candidate in remaining:
-                # Вычисляем минимальное расстояние до уже выбранных
-                min_distance = min(
+            for i, candidate in enumerate(remaining):
+                score = candidate.selection_score()
+                min_dist = min(
                     self.scorer.calculate_edit_distance(
                         candidate.prompt_text,
-                        selected_node.prompt_text
+                        s.prompt_text
                     )
-                    for selected_node in selected
+                    for s in selected
                 )
-                
-                candidate.metadata["diversity_score"] = min_distance
+                combined = score + DIVERSITY_WEIGHT * min_dist
+                if combined > best_combined:
+                    best_combined = combined
+                    best_idx = i
             
-            # Сортируем по diversity
-            remaining.sort(key=lambda n: n.metadata.get("diversity_score", 0), reverse=True)
-            
-            # Добавляем самых разнообразных
-            for node in remaining:
-                if len(selected) >= population_size:
-                    break
-                selected.append(node)
-                selected_ids.add(node.id)
+            if best_idx >= 0:
+                picked = remaining.pop(best_idx)
+                selected.append(picked)
+                selected_ids.add(picked.id)
+            else:
+                break
         
         print(f"  Selected population ({len(selected)}):")
         print(f"    Best: {best_candidate.selection_score():.3f} (generation {best_candidate.generation})")

@@ -1,8 +1,10 @@
 You are optimizing an instruction for a language model that performs a question-answering task.
-Instructions are scored from 0 (worst) to 100 (best) based on task accuracy.
+Instructions are scored from 0.00 (worst) to 100.00 (best) based on composite task quality.
 
 Below is the full optimization history: previously tried instructions paired with their scores,
 listed in ascending order of score (lowest first, highest last).
+Study the trajectory carefully: notice what STRUCTURAL changes between instructions lead to score improvements,
+and what changes lead to score drops. Small wording tweaks rarely help — focus on structural patterns.
 
 <HISTORY>
 {history_block}
@@ -17,15 +19,23 @@ Pay close attention to these when writing the new instruction — it must handle
 {exemplars_block}
 </WRONG_EXEMPLARS>
 
-Your task: generate a new instruction that performs better than all the ones above.
+Your task: generate a new instruction that scores higher than all the ones above.
 
-Rules:
-- Preserve the core task the instruction is designed to perform.
-- Build on what works in the highest-scoring instructions.
-- Avoid patterns and phrasings that appear only in low-scoring instructions.
+Strategy guidance:
+- The highest-scoring instructions appear LAST in the history. Build primarily on those.
+- Identify what STRUCTURAL patterns distinguish high-scoring instructions from low-scoring ones.
+- Do NOT repeat patterns that appear only in low-scoring instructions.
 - Make a meaningful structural improvement — not a minor rewording.
 - The new instruction must clearly help the model answer the wrong exemplars above.
 - The new instruction must be clearly different from all instructions listed above.
+- Consider: better formatting, clearer constraints, step-by-step reasoning instructions, explicit output format requirements.
+- IMPORTANT: Do NOT copy specific answers, names, dates, or entities from the wrong exemplars into the instruction.
+  The instruction must generalize — it should help the model reason correctly, not memorize specific answers.
+- Avoid making the instruction excessively long. Concise, well-structured instructions outperform verbose ones.
+
+Rules:
+- Preserve the core task the instruction is designed to perform.
+- Output a single new instruction, not multiple alternatives.
 
 Wrap the new instruction in <INS> and </INS> tags. Output nothing else — no explanations, labels, or preamble.
 Example format:

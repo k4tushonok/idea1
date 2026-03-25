@@ -5,7 +5,7 @@ from llm.llm_client import BaseLLM
 from llm.llm_response_parser import GradientParser, ClusterParser
 from data_structures import Example, TextGradient, PromptNode
 from diagnostics import is_enabled, prompt_id, preview_text
-from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_ITERATION, MAX_SUCCESS_EXAMPLES, SUCCESS_EXAMPLE_LIMIT, DEFAULT_PRIORITY, CONTRASTIVAE_PRIORITY_BOOST, FAILURE_EXAMPLE_LIMIT, BATCH_SUCCESS_EXAMPLE_LIMIT
+from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_ITERATION, MAX_SUCCESS_EXAMPLES, SUCCESS_EXAMPLE_LIMIT, DEFAULT_PRIORITY, CONTRASTIVE_PRIORITY_BOOST, FAILURE_EXAMPLE_LIMIT, BATCH_SUCCESS_EXAMPLE_LIMIT
 
 class TextGradientGenerator:
     def __init__(self, llm: BaseLLM):
@@ -74,7 +74,7 @@ class TextGradientGenerator:
                 cluster_names.append(f"cluster_{i}")
 
         gradients = []
-        combined_prompt = Templates.build_gradients_batch_prompt(batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES)
+        combined_prompt = Templates.build_gradients_batch_prompt(current_prompt, batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES)
         if is_enabled():
             print(
                 f"[diag] generate_gradients_batch: prompt_id={prompt_id(current_prompt)} "
@@ -151,7 +151,7 @@ class TextGradientGenerator:
                 analysis_text = self.llm.invoke(prompt=analysis_prompt)
                 self._cache[analysis_prompt] = analysis_text
             gradient = GradientParser.parse_gradient_response(analysis_text, hard_negatives, hard_positives, batch_index=0, cluster_name="contrastive")
-            gradient.priority = min(1.0, gradient.priority + CONTRASTIVAE_PRIORITY_BOOST)
+            gradient.priority = min(1.0, gradient.priority + CONTRASTIVE_PRIORITY_BOOST)
             gradient.metadata["type"] = "contrastive"
             if is_enabled():
                 print(
