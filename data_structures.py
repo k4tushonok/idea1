@@ -8,7 +8,8 @@ from config import (
     METRIC_WEIGHTS,
     LINEAGE_RECENT_OPS_LIMIT,
     USE_LLM_CORRECTNESS_CHECK,
-    LOCAL_SIMILARITY_THRESHOLD,
+    CORRECTNESS_TOKEN_F1_THRESHOLD,
+    USE_CONTAINMENT_CHECK,
 )
 
 class OptimizationSource(Enum):
@@ -67,19 +68,29 @@ class Example:
 
     @staticmethod
     def _is_similar_locally(actual: str, expected: str) -> bool:
+        """Token-F1 + containment check"""
         if actual is None or expected is None:
             return False
-        a = [t for t in actual.lower().split() if t]
-        e = [t for t in expected.lower().split() if t]
-        if not a or not e:
+        actual_clean = actual.strip().lower()
+        expected_clean = expected.strip().lower()
+        if not actual_clean or not expected_clean:
             return False
-        set_a = set(a)
-        set_e = set(e)
-        overlap = len(set_a & set_e)
-        union = len(set_a | set_e)
-        if union == 0:
+        # 1. Containment: if expected is a substring of actual, it's correct
+        if USE_CONTAINMENT_CHECK and expected_clean in actual_clean:
+            return True
+        # 2. Token F1 check
+        from collections import Counter as _Counter
+        a_tokens = actual_clean.split()
+        e_tokens = expected_clean.split()
+        if not a_tokens or not e_tokens:
             return False
-        return (overlap / union) >= LOCAL_SIMILARITY_THRESHOLD
+        common = sum((_Counter(a_tokens) & _Counter(e_tokens)).values())
+        if common == 0:
+            return False
+        precision = common / len(a_tokens)
+        recall = common / len(e_tokens)
+        f1 = 2 * precision * recall / (precision + recall)
+        return f1 >= CORRECTNESS_TOKEN_F1_THRESHOLD
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -143,31 +154,34 @@ class EditOperation:
 
 @dataclass
 class Metrics:
-    """Метрики оценки промпта. Композитная оценка для ранжирования кандидатов"""
-    metrics: Dict[str, float] = field(default_factory=lambda: {
-        "accuracy": 0.0,
-        "safety": 0.0,
-        "robustness": 0.0,
-        "efficiency": 0.0,
-        "f1": 0.0
-    })
+    """Метрики оценки промпта. Композитная оценка для ранжирования кандидатов.
+    weights задаются scorer-ом при создании и определяют вклад каждой метрики
+    в композитный score.  Если weights пуст — используется глобальный
+    METRIC_WEIGHTS из config.
+    """
+    metrics: Dict[str, float] = field(default_factory=dict)
+    weights: Dict[str, float] = field(default_factory=dict)
 
     def composite_score(self) -> float:
-        """Вычисление композитной оценки как взвешенной суммы метрик"""
-        keys = set(list(self.metrics.keys()) + list(METRIC_WEIGHTS.keys()))
-        return sum(self.metrics.get(k, 0.0) * METRIC_WEIGHTS.get(k, 0.0) for k in keys)
+        """Взвешенная сумма метрик: Σ(weight_i * metric_i)."""
+        w = self.weights if self.weights else METRIC_WEIGHTS
+        keys = set(list(self.metrics.keys()) + list(w.keys()))
+        return sum(self.metrics.get(k, 0.0) * w.get(k, 0.0) for k in keys)
 
     def to_dict(self) -> Dict:
         d = self.metrics.copy()
         d["composite_score"] = self.composite_score()
+        d["_weights"] = self.weights.copy()
         return d
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> 'Metrics':
         data = data.copy()
         data.pop("composite_score", None)
+        weights = data.pop("_weights", {})
         m = cls()
         m.metrics = {k: float(v) for k, v in data.items()}
+        m.weights = weights if isinstance(weights, dict) else {}
         return m
 
 @dataclass

@@ -28,6 +28,7 @@ LEADING_META_PREFIX_RE = re.compile(
 )
 
 class MarkdownParser:
+    """Парсер Markdown-блоков из ответов LLM"""
     @staticmethod
     def extract_code_blocks(text: str) -> List[str]:
         return [
@@ -63,6 +64,7 @@ class MarkdownParser:
             raise ValueError("Prompt text starts with forbidden meta prefix")
 
 class SectionParser:
+    """Парсер секций"""
     @staticmethod
     def split_by_markers(text: str, markers: List[str], case_sensitive: bool = False) -> Dict[str, str]:
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -115,6 +117,7 @@ class SectionParser:
         return DEFAULT_PRIORITY
 
 class VariantParser:
+    """Парсер вариантов промптов из ответа LLM"""
     @staticmethod
     def split_variant_blocks(response_text: str) -> List[str]:
         if VARIANT_SPLIT_RE.search(response_text):
@@ -184,6 +187,7 @@ class VariantParser:
         )
 
 class GradientParser:
+    """Парсер текстовых градиентов"""
     @staticmethod
     def parse_gradient_response(response_text: str, failure_examples: List[Example], success_examples: List[Example], batch_index: int = None, cluster_name: str = None) -> TextGradient:
         sections = SectionParser.split_by_markers(response_text, SECTION_MARKERS)
@@ -244,6 +248,7 @@ class GradientParser:
         return gradients
     
 class ClusterParser:
+    """Парсер кластеров ошибок"""
     @staticmethod
     def parse_clusters(response_text: str, failure_examples: List[Example]) -> Dict[str, List[Example]]:
         clusters: Dict[str, List[Example]] = defaultdict(list)
@@ -264,32 +269,3 @@ class ClusterParser:
                         clusters[current_category].append(failure_examples[idx])
 
         return dict(clusters) if clusters else {"all": failure_examples}
-    
-class StrategyParser:
-    @staticmethod
-    def parse_strategies(response_text: str) -> List[Dict]:
-        def preprocess_text(text: str) -> str:
-            text = text.replace('*', '').replace('\n', '').replace('#', '').strip()
-            return text
-
-        strategies = []
-        strategy_blocks = re.split(r'STRATEGY\s+\d+:', response_text, flags=re.IGNORECASE)
-        
-        for block in strategy_blocks[1:]:
-            try:
-                desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?=RATIONALE:|SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
-                rationale_match = re.search(r'RATIONALE:\s*(.+?)(?=SPECIFIC_ACTION:|$)', block, re.DOTALL | re.IGNORECASE)
-                action_match = re.search(r'SPECIFIC_ACTION:\s*(.+?)(?=STRATEGY|$)', block, re.DOTALL | re.IGNORECASE)
-
-                if desc_match:
-                    strategy = {
-                        "description": preprocess_text(desc_match.group(1)),
-                        "rationale": preprocess_text(rationale_match.group(1)) if rationale_match else "",
-                        "action": preprocess_text(action_match.group(1)) if action_match else ""
-                    }
-                    strategies.append(strategy)
-            except Exception as e:
-                print(f"Error parsing strategy block: {e}")
-                continue
-        
-        return strategies

@@ -8,6 +8,7 @@ TEMPLATES_DIR = Path(__file__).parent
 class Templates:
     @staticmethod
     def load_template(name: str) -> str:
+        """Загрузка шаблона из файла prompts/<name>.txt"""
         path = TEMPLATES_DIR / f"{name}.txt"
         if not path.exists():
             raise FileNotFoundError(f"Template not found: {path}")
@@ -15,6 +16,7 @@ class Templates:
     
     @staticmethod
     def format_examples(examples: List[Example], max_count: int = None, include_expected: bool = True) -> str:
+        """Форматирование списка примеров в текстовый блок"""
         block = ""
         for i, example in enumerate(examples[:max_count], 1):
             block += f"Example {i}:\n  Input: {example.input_text}\n"
@@ -54,16 +56,8 @@ class Templates:
         return "Analyze these failure examples and group them by error type.\n\n" + examples_block + template
 
     @staticmethod
-    def build_contrastive_prompt(current_prompt: str, hard_negatives: List[Example], hard_positives: List[Example]) -> str:
-        """Построение промпта для контрастного анализа"""
-        hard_negatives_block = Templates.format_examples(hard_negatives, max_count=5)
-        hard_positives_block = Templates.format_examples(hard_positives, max_count=5)
-
-        template = Templates.load_template("contrastive")
-        return template.format(current_prompt=current_prompt, hard_negatives_block=hard_negatives_block, hard_positives_block=hard_positives_block)
-        
-    @staticmethod
-    def build_gradients_batch_prompt(current_prompt: str, batches: list, cluster_names: list, success_examples: List[Example], max_count: int) -> str:
+    def build_gradients_batch_prompt(current_prompt: str, batches: list, cluster_names: list, success_examples: List[Example], max_count: int, reflection_context: str = "") -> str:
+        """Пакетный промпт для генерации N градиентов (по одному на кластер провалов)"""
         # Инструкция: вернуть N градиентов, каждый с наборами секций
         header = (
             f"You are an expert prompt engineer analyzing why a prompt fails on certain examples. "
@@ -75,6 +69,13 @@ class Templates:
             "CRITICAL: Prefer high-impact structural changes (restructure order, add constraints, change formatting) over tiny wording tweaks.\n"
             "Do NOT suggest copying specific values from examples into the prompt."
         )
+        
+        reflection_block = ""
+        if reflection_context:
+            reflection_block = (
+                f"\n\nREFLECTION FROM PREVIOUS OPTIMIZATION STEP "
+                f"(use this to guide your analysis):\n{reflection_context}\n"
+            )
         
         prompt_block = f"\nCURRENT PROMPT BEING ANALYZED:\n```\n{current_prompt}\n```\n"
         
@@ -88,105 +89,63 @@ class Templates:
                 success_section = f"\nSUCCESS EXAMPLES (where the prompt worked correctly):\n{Templates.format_examples(success_examples[:5], max_count=5)}"
             body_parts.append(f"--- CLUSTER: {cluster_name} (SET {i}) ---\nFAILURE EXAMPLES:\n{failure_block}{success_section}")
             
-        return header + prompt_block + "\n\n".join(body_parts)
+        return header + reflection_block + prompt_block + "\n\n".join(body_parts)
     
     @staticmethod
-    def build_specific_prompt(template_name: str, current_prompt: str, content: str) -> str:
-        template = Templates.load_template(template_name)
-        return template.format(current_prompt=current_prompt, content=content)
-
-    @staticmethod
-    def build_strategy_prompt(history_analysis: Dict) -> str:
-        summary = history_analysis["summary"]
-        patterns = history_analysis["patterns"]
-        stagnation = history_analysis["stagnation"]
-        diversity = history_analysis["diversity"]
-        
-        best_prompts_block = ""
-        for i, node_info in enumerate(summary['best_nodes'][:3], 1):
-            best_prompts_block += f"{i}. Score {node_info['score']:.3f} (Gen {node_info['generation']}):\n"
-            best_prompts_block += f"   {node_info['prompt_preview']}\n\n"
-
-        best_elements = history_analysis.get("best_elements", {})
-        common_phrases = best_elements.get("common_phrases", [])
-        if common_phrases:
-            common_phrases_block = "\n".join(f"- {p}" for p in common_phrases)
-        else:
-            common_phrases_block = "None identified"
-
-        worst_prompts_block = ""
-        for i, node in enumerate(history_analysis.get("worst_nodes", [])[:3], 1):
-            worst_prompts_block += f"{i}. Score {node.metrics.composite_score():.3f} (Gen {node.generation}):\n"
-            worst_prompts_block += f"   {node.prompt_text[:100]}...\n\n"
-        if not worst_prompts_block:
-            worst_prompts_block = "None identified"
-        
-        failed_directions_block = ""
-        if history_analysis.get("failed_directions"):
-            for direction in history_analysis["failed_directions"]:
-                failed_directions_block += f"- {direction}\n"
-        else:
-            failed_directions_block = "None identified"
-        
-        unexplored_space_block = ""
-        if history_analysis.get("unexplored_space"):
-            for area in history_analysis["unexplored_space"]:
-                unexplored_space_block += f"- {area}\n"
-        else:
-            unexplored_space_block = "None identified"
-        
-        template = Templates.load_template("strategy")
-        prompt = template.format(
-            total_nodes=summary['total_nodes'],
-            current_generation=summary['current_generation'],
-            best_score=summary['best_nodes'][0]['score'] if summary['best_nodes'] else 0.0,
-            pareto_front_size=summary['pareto_front_size'],
-            successful_operations=patterns['successful_operations'],
-            avg_path_length=patterns['avg_path_length'],
-            is_stagnant=stagnation['is_stagnant'],
-            stagnation_best_score=stagnation['best_score'],
-            avg_similarity=stagnation['avg_similarity'],
-            needs_exploration=stagnation['needs_exploration'],
-            diversity_score=diversity['diversity_score'],
-            needs_diversification=diversity['needs_diversification'],
-            best_prompts_block=best_prompts_block,
-            common_phrases_block=common_phrases_block,
-            worst_prompts_block=worst_prompts_block,
-            failed_directions_block=failed_directions_block,
-            unexplored_space_block=unexplored_space_block
-        )
-        
-        return prompt
-    
-    @staticmethod
-    def build_meta_optimizer_prompt(history_nodes: List, best_node, exemplars: Optional[List[Example]] = None) -> str:
-        """Мета-промпт: вся история (промпт + скор) + wrong-exemplars вставляются напрямую,
-        LLM сама генерирует следующую инструкцию."""
+    def build_meta_optimizer_prompt(
+        history_nodes: List,
+        best_node,
+        exemplars: Optional[List[Example]] = None,
+        few_shot_examples: Optional[List[Example]] = None,
+        reflection_context: str = "",
+    ) -> str:
+        """Мета-промпт: история + wrong-exemplars + few-shot Q&A примеры + reflection"""
         history_lines = []
         for node in history_nodes:
             history_lines.append(
-                f"Instruction: {node.prompt_text}\nScore: {node.selection_score() * 100:.2f}"
+                f"Instruction: {node.prompt_text}\nScore: {node.selection_score() * 100:.1f}"
             )
         history_block = "\n\n".join(history_lines)
 
         if exemplars:
-            ex_lines = [
-                f"{i}. Question: {ex.input_text}\n   Expected answer: {ex.expected_output}"
-                for i, ex in enumerate(exemplars, 1)
-            ]
+            ex_lines = []
+            for i, ex in enumerate(exemplars, 1):
+                line = f"{i}. Q: {ex.input_text[:300]}\n   Expected: {ex.expected_output}"
+                if ex.actual_output:
+                    line += f"\n   Model output: {ex.actual_output[:200]}"
+                ex_lines.append(line)
             exemplars_block = "\n".join(ex_lines)
         else:
             exemplars_block = "None"
 
+        if few_shot_examples:
+            fs_lines = [
+                f"{i}. Q: {ex.input_text[:300]}\n   A: {ex.expected_output}"
+                for i, ex in enumerate(few_shot_examples, 1)
+            ]
+            few_shot_block = "\n".join(fs_lines)
+        else:
+            few_shot_block = "None"
+
+        reflection_block = ""
+        if reflection_context:
+            reflection_block = (
+                f"\nOptimization insight (what worked and what still fails):\n"
+                f"{reflection_context}\n"
+            )
+
         template = Templates.load_template("meta_optimizer")
         return template.format(
             history_block=history_block,
-            best_score=best_node.selection_score(),
+            best_score=best_node.selection_score() * 100,
             exemplars_block=exemplars_block,
+            few_shot_block=few_shot_block,
+            reflection_block=reflection_block,
         )
 
     @staticmethod
     def build_editing_prompt(current_prompt: str, gradient: TextGradient, num_variants: int) -> str:
+        """Промпт для генерации вариантов промпта на основе градиента."""
         suggestions = "\n".join(f"{i}. {s}" for i, s in enumerate(gradient.specific_suggestions, 1))
 
         failure_examples = gradient.failure_examples

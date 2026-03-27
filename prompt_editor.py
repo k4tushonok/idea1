@@ -1,6 +1,5 @@
 from typing import List, Dict, Optional
 from llm.llm_client import BaseLLM
-from llm.llm_response_parser import MarkdownParser
 from llm.llm_response_parser import VariantParser
 from prompts.templates import Templates
 from data_structures import TextGradient, EditOperation, PromptNode, OptimizationSource
@@ -8,6 +7,8 @@ from diagnostics import is_enabled, prompt_id, preview_text
 from config import LOCAL_CANDIDATES_PER_ITERATION
 
 class PromptEditor:
+    """Редактор промптов: генерирует варианты на основе текстовых градиентов"""
+
     def __init__(self, llm: BaseLLM):
         self.llm = llm
         self._cache: Dict[str, str] = {}
@@ -32,7 +33,7 @@ class PromptEditor:
             return variants
         except Exception as e:
             print(f"Error generating variants: {e}")
-            # Возвращаем хотя бы один вариант с базовыми изменениями
+            # Возвращаем хотя бы один fallback-вариант
             additions = "\n".join(f"- {s}" for s in gradient.specific_suggestions)
             new_prompt = f"{current_prompt}\n\nAdditional guidance:\n{additions}"
 
@@ -49,50 +50,4 @@ class PromptEditor:
                     source=OptimizationSource.LOCAL,
                     operations=[operation]
                 )
-            ] 
-    
-    def apply_strategy(
-        self,
-        strategy: Dict,
-        analysis: Dict,
-        generation: int,
-        variation_id: Optional[int] = None,
-    ) -> Optional[PromptNode]:
-        """Единственный обработчик глобальных стратегий. LLM получает лучший промпт и свободное описание изменения"""
-        best_nodes = analysis["best_elements"]["prompts"]
-        if not best_nodes:
-            return None
-        best_node = best_nodes[0]
-
-        prompt = Templates.build_specific_prompt("overall", best_node.prompt_text, strategy["action"])
-        if variation_id is not None:
-            prompt = f"{prompt}\n\nVARIANT_ID: {variation_id} (do not include in output)"
-        if is_enabled():
-            print(
-                f"[diag] apply_strategy: base_prompt_id={prompt_id(best_node.prompt_text)} "
-                f"action='{preview_text(strategy.get('action', ''), 200)}'"
-            )
-        try:
-            if prompt in self._cache:
-                new_text = MarkdownParser.normalize_prompt_text(self._cache[prompt])
-            else:
-                resp = self.llm.invoke(prompt=prompt)
-                self._cache[prompt] = resp
-                new_text = MarkdownParser.normalize_prompt_text(resp)
-        except Exception as e:
-            print(f"    Error in apply_strategy: {e}")
-            return None
-
-        operation = EditOperation(
-            description=strategy["description"],
-            before_snippet=best_node.prompt_text + "...",
-            after_snippet=new_text + "..."
-        )
-        return PromptNode(
-            prompt_text=new_text,
-            parent_id=best_node.id,
-            generation=generation,
-            source=OptimizationSource.GLOBAL,
-            operations=[operation],
-            metadata={"global_strategy": strategy}
-        )
+            ]

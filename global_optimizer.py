@@ -11,7 +11,7 @@ from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
 from prompt_editor import PromptEditor
 from llm.llm_response_parser import MarkdownParser
-from diagnostics import is_enabled, prompt_id, preview_text, print_section, sources_summary, scores_summary, print_candidates_summary
+from diagnostics import is_enabled, prompt_id, scores_summary, print_candidates_summary, llm_calls, print_gate_comparison
 from config import (TOP_BEST_NODES,
                     MAX_DISTANCE_PAIRS,
                     COMMON_WORDS_TOP_K,
@@ -32,6 +32,7 @@ from config import (TOP_BEST_NODES,
                     MIN_IMPROVEMENT,
                     GLOBAL_HISTORY_WINDOW,
                     EXEMPLAR_COUNT,
+                    FEW_SHOT_COUNT,
                     HISTORY_SCORE_THRESHOLD,
                     EXEMPLAR_SELECTION_STRATEGY,
                     CROSSOVER_CANDIDATES,
@@ -58,12 +59,10 @@ class GlobalOptimizer:
 
         # Wrong-exemplars: единый накопленный счётчик провалов по input_text (все шаги)
         self._failure_counter: Counter = Counter()
-        # Кэш Example-объектов по input_text — нужен потому что failure-примеры берутся из
-        # validation_examples, тогда как _top_exemplars_from_counter ищет по train_examples.
         self._failure_examples_cache: Dict[str, Example] = {}
         self._processed_node_ids: set = set()
-        # MD5-хэши всех когда-либо сгенерированных кандидатов для быстрой дедупликации
         self._seen_prompt_hashes: set = set()
+        self.reflection_context: str = ""
         
     def optimize(self, current_generation: int, train_examples: List[Example], validation_examples: List[Example]) -> List[PromptNode]:
         print("\n" + "=" * 60)
@@ -101,9 +100,10 @@ class GlobalOptimizer:
         # Шаг 2: Генерация кандидатов через мета-оптимизатор (история → LLM → новая инструкция)
         print("\nStep 2: Generating candidates via meta-optimizer...")
         exemplars = self._select_exemplars(train_examples, current_generation)
+        few_shot = self._select_few_shot_examples(train_examples, current_generation)
         if is_enabled():
-            print(f"[diag] wrong-exemplars selected={len(exemplars)}")
-        candidates = self._generate_candidates_from_history(history_analysis, current_generation, exemplars)
+            print(f"[diag] wrong-exemplars selected={len(exemplars)}, few-shot={len(few_shot)}")
+        candidates = self._generate_candidates_from_history(history_analysis, current_generation, exemplars, few_shot)
         
         # Генерация кандидатов-кроссоверов из лучших промптов
         print("\nStep 2b: Generating crossover candidates...")
@@ -117,7 +117,7 @@ class GlobalOptimizer:
 
         # Шаг 3: Pre-screen on mini-batch, then full evaluate only promising candidates
         print("\nStep 3: Pre-screening global candidates on mini-batch...")
-        mini_batch = self._create_mini_batch(validation_examples)
+        mini_batch = self._create_mini_batch(validation_examples, seed=current_generation)
         prescreened = self._prescreen_global_candidates(candidates, mini_batch, history_analysis)
         
         if not prescreened:
@@ -127,22 +127,21 @@ class GlobalOptimizer:
         
         print(f"\nStep 3b: Full evaluation of {len(prescreened)}/{len(candidates)} pre-screened candidates...")
         evaluated_candidates = self._evaluate_global_candidates(prescreened, validation_examples)
-        baseline_accuracy = 0.0
+
+        best_composite = 0.0
         best_node = history_analysis.get("best_node")
         if best_node and best_node.is_evaluated:
-            # Используем допуск для глобального исследования: допускаем кандидатов в пределах GLOBAL_QUALITY_GATE_TOLERANCE от лучшей точности. 
-            baseline_accuracy = best_node.selection_accuracy() * GLOBAL_QUALITY_GATE_TOLERANCE
+            
+            best_composite = best_node.selection_score() * GLOBAL_QUALITY_GATE_TOLERANCE
 
-        # Фильтруем до анализа — также проверяем композитную оценку
-        best_composite = best_node.selection_score() * GLOBAL_QUALITY_GATE_TOLERANCE if best_node and best_node.is_evaluated else 0.0
         valid_for_refinement = [
             c for c in evaluated_candidates
-            if (c.metrics.metrics.get("accuracy", 0.0) >= baseline_accuracy
-                or c.metrics.composite_score() >= best_composite)
+            if c.selection_score() >= best_composite
         ]
         if len(valid_for_refinement) != len(evaluated_candidates):
             print(
                 f"Filtered out {len(evaluated_candidates) - len(valid_for_refinement)} global candidates "
+                f"below composite gate {best_composite:.3f}"
             )
 
         # Анализируем только допустимых кандидатов
@@ -160,8 +159,8 @@ class GlobalOptimizer:
                 print_candidates_summary("global valid_for_refinement", valid_for_refinement)
 
         if not valid_for_refinement:
-            print("[diag] All global candidates have zero accuracy — skipping refinement")
-            return []
+            print(f"  No global candidates passed quality gate {best_composite:.3f} — returning {len(evaluated_candidates)} for local refinement")
+            return evaluated_candidates
 
         return valid_for_refinement
     
@@ -389,7 +388,26 @@ class GlobalOptimizer:
                 f"Valid values: accumulative_most_frequent, current_most_frequent, random, constant"
             )
 
-    def _generate_candidates_from_history(self, history_analysis: Dict, current_generation: int, exemplars: Optional[List[Example]] = None) -> List[PromptNode]:
+    def _select_few_shot_examples(self, train_examples: List[Example], current_generation: int) -> List[Example]:
+        best_nodes = self.history.get_best_nodes(1)
+        if best_nodes:
+            successes = best_nodes[0].evaluation_examples.get("success", [])
+            if successes:
+                rng = np.random.default_rng(current_generation)
+                k = min(FEW_SHOT_COUNT, len(successes))
+                indices = sorted(rng.choice(len(successes), size=k, replace=False).tolist())
+                selected = [successes[i] for i in indices]
+                if is_enabled():
+                    print(f"[diag] few-shot: {len(selected)} success examples from best node")
+                return selected
+
+        # Fallback: random from train
+        rng = np.random.default_rng(current_generation + 1000)
+        k = min(FEW_SHOT_COUNT, len(train_examples))
+        indices = sorted(rng.choice(len(train_examples), size=k, replace=False).tolist())
+        return [train_examples[i] for i in indices]
+
+    def _generate_candidates_from_history(self, history_analysis: Dict, current_generation: int, exemplars: Optional[List[Example]] = None, few_shot_examples: Optional[List[Example]] = None) -> List[PromptNode]:
         """Мета-оптимизатор: вся история (промпт + скор) + wrong-exemplars вставляются в мета-промпт,
         LLM напрямую генерирует новую инструкцию."""
         best_nodes = history_analysis["best_elements"]["prompts"]
@@ -400,17 +418,21 @@ class GlobalOptimizer:
         # Узлы для мета-промпта: фильтрация по порогу + окно
         history_nodes = self._get_meta_prompt_nodes()
 
-        meta_prompt = Templates.build_meta_optimizer_prompt(history_nodes, best_node, exemplars)
+        meta_prompt = Templates.build_meta_optimizer_prompt(
+            history_nodes, best_node, exemplars, few_shot_examples,
+            reflection_context=self.reflection_context,
+        )
         if is_enabled():
             print(
                 f"[diag] meta-optimizer: history_nodes={len(history_nodes)} "
                 f"best_score={best_node.selection_score():.3f} "
-                f"exemplars={len(exemplars) if exemplars else 0}"
+                f"exemplars={len(exemplars) if exemplars else 0} "
+                f"few_shot={len(few_shot_examples) if few_shot_examples else 0}"
             )
 
         candidates = []
         for i in range(GLOBAL_CANDIDATES):
-            prompt = meta_prompt
+            prompt = meta_prompt + f"\n\n(Generate variation {i+1} of {GLOBAL_CANDIDATES} — be creative and diverse)"
             try:
                 raw = self.llm.invoke(prompt=prompt, temperature=GLOBAL_OPTIMIZER_TEMPERATURE)
                 # Извлекаем текст из тегов <INS>...</INS>; fallback — нормализация Markdown
@@ -570,38 +592,63 @@ class GlobalOptimizer:
         
         return candidates
     
-    def _create_mini_batch(self, validation_examples: List[Example]) -> List[Example]:
+    def _create_mini_batch(self, validation_examples: List[Example], seed: int = 0) -> List[Example]:
         import random as rng_module
         mini_size = max(5, int(len(validation_examples) * MINI_BATCH_RATIO))
         if mini_size >= len(validation_examples):
             return validation_examples
-        rng = rng_module.Random(42)
+        rng = rng_module.Random(42 + seed)
         indices = sorted(rng.sample(range(len(validation_examples)), mini_size))
         return [validation_examples[i] for i in indices]
     
     def _prescreen_global_candidates(self, candidates: List[PromptNode], mini_batch: List[Example], history_analysis: Dict) -> List[PromptNode]:
+        import time as _t
+        _gps_t0 = _t.time()
+        _gps_calls0 = llm_calls(self.scorer.llm)
+
         best_node = history_analysis.get("best_node")
         gate_score = 0.0
         if best_node and best_node.is_evaluated:
-            gate_score = best_node.selection_score() * GLOBAL_PRESCREEN_GATE
+            best_stage1 = self.scorer.evaluate_prompt(
+                best_node.prompt_text, mini_batch,
+                execute=True, sample=False, stage=1,
+            )
+            gate_score = best_stage1.composite_score() * GLOBAL_PRESCREEN_GATE
+            if is_enabled():
+                print(f"[diag] prescreen gate: best_stage1={best_stage1.composite_score():.3f} "
+                      f"× {GLOBAL_PRESCREEN_GATE} = {gate_score:.3f}")
         
         passed = []
         for i, candidate in enumerate(candidates, 1):
             try:
                 metrics = self.scorer.evaluate_prompt(
                     candidate.prompt_text, mini_batch,
-                    execute=True, sample=False
+                    execute=True, sample=False, stage=1
                 )
                 score = metrics.composite_score()
-                print(f"  Pre-screen global {i}/{len(candidates)}: {score:.3f} (gate={gate_score:.3f})", end="")
-                if score >= gate_score:
+                did_pass = score >= gate_score
+                print(f"  Pre-screen global {i}/{len(candidates)}: {score:.3f} (gate={gate_score:.3f}, stage 1)", end="")
+                if did_pass:
                     print(" ✓ passed")
                     passed.append(candidate)
                 else:
                     print(" ✗ filtered")
+                if is_enabled():
+                    print_gate_comparison(
+                        f"global_prescreen_{i}", score, gate_score, stage=1, passed=did_pass,
+                    )
             except Exception as e:
                 print(f"  Pre-screen error {i}: {e}")
         
+        if is_enabled():
+            _gps_elapsed = _t.time() - _gps_t0
+            _gps_calls1 = llm_calls(self.scorer.llm)
+            print(
+                f"[diag] global pre-screen summary: {len(passed)}/{len(candidates)} passed, "
+                f"gate={gate_score:.3f} llm_calls={_gps_calls1 - _gps_calls0} "
+                f"time={_gps_elapsed:.2f}s"
+            )
+
         print(f"Pre-screen: {len(passed)}/{len(candidates)} candidates passed gate")
         return passed
     
@@ -687,24 +734,7 @@ class GlobalOptimizer:
         stagnation_info = self.history.get_stagnation_info()
         if stagnation_info["is_stagnant"]:
             print("Global step triggered by stagnation")
-            if is_enabled():
-                print(f"[diag] stagnation info: {stagnation_info}")
             return True
-        
-        # Триггер 3: Низкое разнообразие
-        current_gen_nodes = self.history.get_nodes_by_generation(current_generation)
-        if len(current_gen_nodes) >= MIN_NODES_FOR_DIVERSITY:
-            distances = []
-            for i in range(min(MAX_DIVERSITY_SAMPLES, len(current_gen_nodes))):
-                for j in range(i+1, min(MAX_DIVERSITY_SAMPLES, len(current_gen_nodes))):
-                    distances.append(self.scorer.calculate_edit_distance(current_gen_nodes[i].prompt_text, current_gen_nodes[j].prompt_text))
-            if distances and np.mean(distances) < LOW_DIVERSITY_THRESHOLD:
-                print("Global step triggered by low diversity")
-                if is_enabled():
-                    print(f"[diag] diversity trigger: avg_distance={np.mean(distances):.3f} < threshold={LOW_DIVERSITY_THRESHOLD}")
-                return True
-            elif is_enabled():
-                print(f"[diag] global diversity check: avg_distance={np.mean(distances):.3f} (threshold={LOW_DIVERSITY_THRESHOLD}) — no trigger")
             
         return False
     
