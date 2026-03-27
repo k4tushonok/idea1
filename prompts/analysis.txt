@@ -34,7 +34,10 @@ Describe the semantic direction in which the prompt should be modified.
 - What examples or patterns should be incorporated?
 
 ## SPECIFIC SUGGESTIONS
-Provide 3-5 concrete, actionable suggestions for modifying the prompt:
+Provide 3-5 concrete, actionable suggestions for modifying the prompt.
+Each suggestion must describe a STRUCTURAL change, not a wording tweak.
+Bad: "Use clearer language" — this is vague.
+Good: "Add an explicit instruction: if the answer is not in the context, output exactly 'No answer'" — this is structural.
 1. [First specific suggestion]
 2. [Second specific suggestion]
 3. [Third specific suggestion]

@@ -3,7 +3,7 @@ from prompts.templates import Templates
 import random
 from llm.llm_client import BaseLLM
 from llm.llm_response_parser import GradientParser, ClusterParser
-from data_structures import Example, TextGradient, PromptNode
+from data_structures import Example, TextGradient
 from diagnostics import is_enabled, prompt_id, preview_text
 from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_ITERATION, SUCCESS_EXAMPLE_LIMIT, DEFAULT_PRIORITY, FAILURE_EXAMPLE_LIMIT
 
@@ -140,4 +140,4 @@ class TextGradientGenerator:
             return clusters
         except Exception as e:
             print(f"Error clustering failures: {e}")
-            return {"all": failure_examples}        
+            return {"all": failure_examples}

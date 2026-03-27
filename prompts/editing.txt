@@ -7,15 +7,6 @@ You are an expert prompt engineer. Your task is to improve a prompt based on ana
 ## FAILURE EXAMPLES (what the current prompt produces incorrectly):
 {failures_block}
 
-CRITICAL RULES:
-1. Do NOT copy specific values, titles, names, numbers, or entities from these examples into the prompt text.
-   Examples are for analysis only. The prompt must generalize to any input.
-2. The output must be a prompt FOR the language model performing the task,
-   not a description of how to edit a prompt. Write what the model should DO.
-3. Keep the improved prompt concise. Do NOT bloat it with redundant instructions.
-   A well-structured short prompt beats a long unfocused one.
-4. Preserve any output format requirements from the current prompt.
-
 ## ANALYSIS OF PROBLEMS:
 {error_analysis}
 
@@ -25,22 +16,29 @@ CRITICAL RULES:
 ## SPECIFIC SUGGESTIONS:
 {specific_suggestions_block}
 
-## YOUR TASK:
-Generate {num_variants} improved versions of the prompt that address the problems identified above.
+## MANDATORY CONSTRAINTS:
+1. Do NOT just rephrase/paraphrase the current prompt. PARAPHRASING = FAILURE.
+   If your variant says the same thing in different words, it is REJECTED.
+2. Each variant MUST introduce a NEW structural element not present in the current prompt.
+   Examples of valid structural changes:
+   - Add an explicit output format constraint (e.g., "Reply with only the exact text span")
+   - Add a decision rule for edge cases (e.g., "If the question cannot be answered from the context, respond with exactly 'No answer'")
+   - Add step-by-step reasoning (e.g., "First locate the relevant sentence, then extract the answer")
+   - Add disambiguation rules (e.g., "If multiple answers are possible, choose the most specific one")
+   - Change the task framing (e.g., from "answer the question" to "extract the minimal text span that answers")
+3. Do NOT copy specific values, names, numbers from the failure examples into the prompt.
+4. The output must be a prompt FOR the language model, not a description of how to edit a prompt.
+5. Keep prompts concise (1-5 sentences). A focused short prompt beats a long unfocused one.
+6. Preserve any output format requirements from the current prompt.
+7. Inside each PROMPT code block, start directly with the prompt text.
 
-## REQUIREMENTS:
-1. Each variant must be STRUCTURALLY DIFFERENT — not just reworded
-2. Each variant must be a COMPLETE, FUNCTIONAL prompt
-3. Focus on high-impact structural changes: reordering, adding constraints, changing format
-4. Do NOT inject domain-specific content or example-specific facts
-5. Consider adding step-by-step reasoning cues, output format constraints, or disambiguation rules
-6. Inside each PROMPT code block, start directly with the prompt text
-7. The improved prompt should be similar in length to the original (±50%). Avoid bloat.
+## YOUR TASK:
+Generate {num_variants} improved versions. Each must have a genuinely different structure.
 
 ## OUTPUT FORMAT:
 For each variant, use this exact format:
 VARIANT [number]:
-CHANGES MADE: [Brief description of what you changed and why]
+CHANGES MADE: [What NEW structural element you added and why it fixes the failures]
 PROMPT:
 ```
 [The complete improved prompt here]

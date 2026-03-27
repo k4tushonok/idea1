@@ -15,14 +15,20 @@ class Templates:
         return path.read_text(encoding="utf-8")
     
     @staticmethod
-    def format_examples(examples: List[Example], max_count: int = None, include_expected: bool = True) -> str:
+    def format_examples(examples: List[Example], max_count: int = None, include_expected: bool = True, truncate_input: int = 300) -> str:
         """Форматирование списка примеров в текстовый блок"""
         block = ""
         for i, example in enumerate(examples[:max_count], 1):
-            block += f"Example {i}:\n  Input: {example.input_text}\n"
+            input_text = example.input_text
+            if truncate_input and len(input_text) > truncate_input:
+                input_text = input_text[:truncate_input] + "..."
+            block += f"Example {i}:\n  Input: {input_text}\n"
             if include_expected:
                 block += f"  Expected: {example.expected_output}\n"
-            block += f"  Actual: {example.actual_output}\n\n"
+            actual = example.actual_output or "None"
+            if truncate_input and len(actual) > truncate_input:
+                actual = actual[:truncate_input] + "..."
+            block += f"  Actual: {actual}\n\n"
         return block
     
     @staticmethod
@@ -98,10 +104,12 @@ class Templates:
         exemplars: Optional[List[Example]] = None,
         few_shot_examples: Optional[List[Example]] = None,
         reflection_context: str = "",
+        failed_directions: Optional[List[str]] = None,
     ) -> str:
-        """Мета-промпт: история + wrong-exemplars + few-shot Q&A примеры + reflection"""
+        """Мета-промпт: история в порядке возрастания score + wrong-exemplars + reflection + failed directions"""
+        sorted_nodes = sorted(history_nodes, key=lambda n: n.selection_score())
         history_lines = []
-        for node in history_nodes:
+        for node in sorted_nodes:
             history_lines.append(
                 f"Instruction: {node.prompt_text}\nScore: {node.selection_score() * 100:.1f}"
             )
@@ -132,6 +140,13 @@ class Templates:
             reflection_block = (
                 f"\nOptimization insight (what worked and what still fails):\n"
                 f"{reflection_context}\n"
+            )
+
+        if failed_directions:
+            failed_block = "\n".join(f"- {d}" for d in failed_directions[:5])
+            reflection_block += (
+                f"\nFAILED APPROACHES (avoid these — they were tried and didn't work):\n"
+                f"{failed_block}\n"
             )
 
         template = Templates.load_template("meta_optimizer")
@@ -184,3 +199,4 @@ class Templates:
             prompt_b=node_b.prompt_text,
             score_b=f"{node_b.selection_score():.3f}",
         )
+

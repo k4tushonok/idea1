@@ -421,6 +421,7 @@ class GlobalOptimizer:
         meta_prompt = Templates.build_meta_optimizer_prompt(
             history_nodes, best_node, exemplars, few_shot_examples,
             reflection_context=self.reflection_context,
+            failed_directions=history_analysis.get("failed_directions"),
         )
         if is_enabled():
             print(

@@ -1,6 +1,6 @@
 You are optimizing an instruction for a language model that answers questions based on provided context passages. The task is extractive QA: answer from context, or "No answer" if unanswerable.
 
-Below are previous instructions and their scores (0–100, higher is better):
+Below are previous instructions sorted by score from worst to best (0–100). Study the trend of improvement — understand what made higher-scoring instructions better:
 
 <HISTORY>
 {history_block}
@@ -14,7 +14,7 @@ These questions are answered WRONG by the current best instruction:
 {exemplars_block}
 </WRONG_EXAMPLES>
 
-These questions are answered CORRECTLY (the new instruction should still handle these well):
+These questions are answered CORRECTLY (the new instruction MUST still handle these well):
 
 <FEW_SHOT_EXAMPLES>
 {few_shot_block}
@@ -22,9 +22,11 @@ These questions are answered CORRECTLY (the new instruction should still handle 
 
 Generate a NEW instruction that scores higher than {best_score:.1f}.
 Requirements:
-- Handle both answerable questions (extract from context) and unanswerable questions ("No answer")
-- Be concise (1–4 sentences)
-- Fix the failure patterns shown above while preserving what works
+- Study the score progression above: higher-scoring instructions share certain structural patterns — build on them
+- Handle both answerable questions (extract answer from context) and unanswerable questions (output only "No answer")
+- Be concise but precise (1–4 sentences)
+- Fix the failure patterns shown in WRONG_EXAMPLES while preserving what works in FEW_SHOT_EXAMPLES
 - Try a STRUCTURALLY DIFFERENT approach from existing instructions, not just rephrasing
+- Consider: explicit format constraints, disambiguation rules, step-by-step reasoning cues
 
 Wrap your instruction in <INS> and </INS> tags.

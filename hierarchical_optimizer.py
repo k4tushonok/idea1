@@ -14,7 +14,7 @@ from diagnostics import (
     is_enabled, prompt_id,
     print_population, print_timing, sources_summary, scores_summary, print_candidates_summary
 )
-from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES, DIVERSITY_WEIGHT, GLOBAL_REFINE_WITH_LOCAL, STAGE3_TOP_K, REFLECTION_ENABLED
+from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
     def __init__(self):
@@ -113,6 +113,7 @@ class HierarchicalOptimizer:
                 
                 try:
                     self.local_optimizer._evaluated_prompts.clear()
+                    self.local_optimizer._train_outcomes_cache.clear()
                     self.editor._cache.clear()
                     self.gradient_gen._cache.clear()
                     
@@ -154,30 +155,26 @@ class HierarchicalOptimizer:
                         global_candidates_sorted = sorted(global_candidates, key=lambda n: n.selection_score(), reverse=True)
                         top_global = global_candidates_sorted[:2]
                         
-                        if GLOBAL_REFINE_WITH_LOCAL:
-                            print(f"\nRefining {len(top_global)} global candidates with local optimization...")
-                            
-                            for i, global_candidate in enumerate(top_global, 1):
-                                print(f"\n  Refining global candidate {i}/{len(top_global)}")
-                                try:
-                                    self.local_optimizer._evaluated_prompts.clear()
-                                    self.local_optimizer._train_outcomes_cache.clear()
-                                    self.editor._cache.clear()
-                                    self.gradient_gen._cache.clear()
-                                    
-                                    refined = self.local_optimizer.optimize(
-                                        starting_node=global_candidate,
-                                        train_examples=train_examples,
-                                        validation_examples=validation_examples
-                                    )
-                                    new_candidates.append(refined)
-                                    
-                                except Exception as e:
-                                    print(f"    Error refining: {e}")
-                                    new_candidates.append(global_candidate)
-                        else:
-                            print(f"\nInjecting {len(top_global)} global candidates into population (no local refinement)")
-                            new_candidates.extend(top_global)
+                        print(f"\nRefining {len(top_global)} global candidates with local optimization...")
+                        
+                        for i, global_candidate in enumerate(top_global, 1):
+                            print(f"\n  Refining global candidate {i}/{len(top_global)}")
+                            try:
+                                self.local_optimizer._evaluated_prompts.clear()
+                                self.local_optimizer._train_outcomes_cache.clear()
+                                self.editor._cache.clear()
+                                self.gradient_gen._cache.clear()
+                                
+                                refined = self.local_optimizer.optimize(
+                                    starting_node=global_candidate,
+                                    train_examples=train_examples,
+                                    validation_examples=validation_examples
+                                )
+                                new_candidates.append(refined)
+                                
+                            except Exception as e:
+                                print(f"    Error refining: {e}")
+                                new_candidates.append(global_candidate)
                     
                 except Exception as e:
                     print(f"Error in global optimization: {e}")
@@ -224,16 +221,23 @@ class HierarchicalOptimizer:
                 generations_without_improvement = 0
                 
                 # Генерируем рефлексию для следующего поколения
-                if REFLECTION_ENABLED:
-                    try:
-                        self._reflection_context = self._generate_reflection(
-                            prev_best, generation_best, train_examples
-                        )
-                    except Exception as e:
-                        print(f"  Reflection generation failed: {e}")
+                try:
+                    self._reflection_context = self._generate_reflection(
+                        prev_best, generation_best, train_examples
+                    )
+                except Exception as e:
+                    print(f"  Reflection generation failed: {e}")
             else:
                 print(f"  ✗ No significant improvement")
                 generations_without_improvement += 1
+                
+                if generations_without_improvement >= 1:
+                    try:
+                        self._reflection_context = self._generate_reflection(
+                            self.best_node, generation_best, train_examples
+                        )
+                    except Exception as e:
+                        print(f"  Stagnation reflection failed: {e}")
             
             # Логирование
             generation_time = time.time() - generation_start_time
@@ -320,7 +324,7 @@ class HierarchicalOptimizer:
         # Получение текущих провалов для контекста
         failures_block = ""
         if curr_best.evaluation_examples.get("failures"):
-            failures = curr_best.evaluation_examples["failures"][:3]
+            failures = curr_best.evaluation_examples["failures"][:5]
             failure_lines = []
             for i, ex in enumerate(failures, 1):
                 failure_lines.append(
@@ -331,7 +335,8 @@ class HierarchicalOptimizer:
             failures_block = "\n".join(failure_lines)
         
         reflection_prompt = (
-            "You are reviewing the optimization progress of a prompt.\n\n"
+            "You are a prompt optimization strategist. Analyze the optimization progress "
+            "and provide DIRECTIVE instructions for the next step.\n\n"
             f"PREVIOUS BEST PROMPT (Score: {prev_best.selection_score():.3f}):\n"
             f"```\n{prev_best.prompt_text}\n```\n\n"
             f"CURRENT BEST PROMPT (Score: {curr_best.selection_score():.3f}):\n"
@@ -343,10 +348,13 @@ class HierarchicalOptimizer:
                 f"{failures_block}\n\n"
             )
         reflection_prompt += (
-            "Provide a brief, actionable reflection (3-5 sentences):\n"
-            "1. What specific improvements worked?\n"
-            "2. What are the remaining weaknesses?\n"
-            "3. What direction should the next optimization step take?"
+            "Provide a DIRECTIVE reflection (3-5 sentences):\n"
+            "1. What specific structural change caused the improvement?\n"
+            "2. What is the PRIMARY remaining weakness pattern?\n"
+            "3. Give ONE specific structural modification to try next (be concrete: "
+            "e.g., 'add a constraint that forces X format when Y condition')\n"
+            "4. What should definitely NOT be changed (preserve what works)?\n"
+            "Be concise and actionable. No vague advice."
         )
         
         try:

@@ -18,14 +18,12 @@ from diagnostics import (
 )
 from config import (
     METRICS_CONFIG,
-    METRIC_WEIGHTS,
     MAX_EXAMPLES_PER_NODE,
     USE_LLM_EDIT_DISTANCE,
     BATCH_EVAL_SIZE,
     STABILITY_LAMBDA,
     BOOTSTRAP_RUNS,
     BOOTSTRAP_SAMPLE_RATIO,
-    NORMALIZE_STAGE_WEIGHTS,
     JUDGE_BATCH_SIZE,
 )
 
@@ -315,12 +313,9 @@ class PromptScorer:
                     print(f"[diag]     {name}: {combined_scores.get(name, 0.0):.4f} (weight={w})")
 
         # Нормализация весов, чтобы composite ∈ [0, 1] на любом stage
-        if NORMALIZE_STAGE_WEIGHTS:
-            total_w = sum(active_weights.values())
-            if total_w > 0 and abs(total_w - 1.0) > 1e-6:
-                metrics.weights = {k: v / total_w for k, v in active_weights.items()}
-            else:
-                metrics.weights = active_weights.copy()
+        total_w = sum(active_weights.values())
+        if total_w > 0 and abs(total_w - 1.0) > 1e-6:
+            metrics.weights = {k: v / total_w for k, v in active_weights.items()}
         else:
             metrics.weights = active_weights.copy()
 

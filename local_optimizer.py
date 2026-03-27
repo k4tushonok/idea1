@@ -18,6 +18,7 @@ from config import (
     MINI_BATCH_RATIO,
     PRE_SCREEN_TOP_K,
     MAX_GRADIENT_PAIRS,
+    TRAIN_FAILURE_SAMPLE_SIZE
 )
 
 
@@ -72,6 +73,10 @@ class LocalOptimizer:
             iteration_start_time = time.time()
             calls_before = getattr(self.scorer.llm, 'total_api_calls', 0)
             
+            self._train_outcomes_cache.clear()
+            self.gradient_gen._cache.clear()
+            self.editor._cache.clear()
+            
             print(f"\n--- Iteration {iteration + 1}/{LOCAL_ITERATIONS_PER_GENERATION} (no_improve={no_improve_iters}/{PATIENCE}) ---")
             if is_enabled():
                 print_population(f"beam state iter={iteration + 1}", current_beam)
@@ -91,7 +96,7 @@ class LocalOptimizer:
             for b_idx, parent in enumerate(current_beam, 1):
                 print(f"  Beam member {b_idx}/{len(current_beam)} (score: {parent.selection_score():.3f})")
 
-                failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(parent, train_examples)
+                failure_examples, success_examples, real_rate = self._get_train_examples_outcomes(parent, train_examples, iteration=iteration)
                 if is_enabled():
                     print(f"[diag] beam[{b_idx}] train outcomes: failures={len(failure_examples)} successes={len(success_examples)}")
                 if not failure_examples:
@@ -226,17 +231,24 @@ class LocalOptimizer:
         
         return max(current_beam, key=lambda n: n.selection_score())
     
-    def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example]) -> Tuple[List[Example], List[Example], float]:
-        cache_key = node.prompt_text
+    def _get_train_examples_outcomes(self, node: PromptNode, examples: List[Example], iteration: int = 0) -> Tuple[List[Example], List[Example], float]:
+        cache_key = f"{node.prompt_text}__iter_{iteration}"
         if cache_key in self._train_outcomes_cache:
             failures, successes, rate = self._train_outcomes_cache[cache_key]
             print(f"  Train outcomes: cached ({len(failures)} failures, {rate:.1%})")
             return failures, successes, rate
         
-        print(f"Executing prompt on {len(examples)} examples to find failures...")
+        sample_size = min(TRAIN_FAILURE_SAMPLE_SIZE, len(examples))
+        if sample_size < len(examples):
+            rng = random.Random(42 + hash(node.prompt_text) % 1000 + iteration * 13)
+            sampled = rng.sample(examples, sample_size)
+            print(f"Sampling {sample_size}/{len(examples)} train examples for failure detection (iter={iteration})...")
+        else:
+            sampled = examples
+
         eval_examples = [
             Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata))
-            for ex in examples
+            for ex in sampled
         ]
         executed_examples = self.scorer.execute_prompt_batch(node.prompt_text, eval_examples)
 
@@ -249,7 +261,7 @@ class LocalOptimizer:
                 failures.append(ex)
 
         real_rate = len(failures) / max(len(executed_examples), 1)
-        print(f"Train failures: {len(failures)}/{len(executed_examples)} ({real_rate:.1%})")
+        print(f"Train failures: {len(failures)}/{len(executed_examples)} ({real_rate:.1%}) [sampled from {len(examples)}]")
 
         if len(failures) > LOCAL_BATCH_SIZE:
             step = len(failures) / LOCAL_BATCH_SIZE
