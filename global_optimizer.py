@@ -47,7 +47,6 @@ class GlobalOptimizer:
         self.scorer = scorer
         self.editor = prompt_editor
         self.llm = llm
-        self._cache: Dict[str, str] = {}
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0

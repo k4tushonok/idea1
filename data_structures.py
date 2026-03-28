@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, ClassVar
 from datetime import datetime
 from enum import Enum
 import uuid
@@ -33,21 +33,26 @@ class Example:
             return False
         return self.expected_output.strip().lower() == self.actual_output.strip().lower()
 
-    def is_correct_by_llm(self, llm)-> bool:
-        """Проверка корректности ответа"""
+    _correctness_cache: ClassVar[Dict[tuple, bool]] = {}
+
+    def is_correct_by_llm(self, llm) -> bool:
+        """Проверка корректности ответа (с кешированием)"""
         if self.actual_output is None:
             return False
-        
+
         try:
             if self.expected_output is not None and self.expected_output.strip() and \
                self.expected_output.strip().lower() == self.actual_output.strip().lower():
                 return True
         except Exception:
-            print("LLM correctness evaluation failed during direct comparison")
             pass
 
         if not USE_LLM_CORRECTNESS_CHECK:
             return self._is_similar_locally(self.actual_output, self.expected_output)
+
+        cache_key = (self.actual_output.strip().lower(), self.expected_output.strip().lower())
+        if cache_key in Example._correctness_cache:
+            return Example._correctness_cache[cache_key]
 
         prompt = (f"There are two answers on the same question. "
                   f"'Expected output' is a true answer used as label during dataset training. "
@@ -61,7 +66,9 @@ class Example:
                   f"- Expected output: {self.expected_output}\n")
         try:
             response = llm.invoke(prompt)
-            return response.strip().lower() == 'yes'
+            result = response.strip().lower() == 'yes'
+            Example._correctness_cache[cache_key] = result
+            return result
         except Exception:
             print("LLM correctness evaluation failed")
             return False

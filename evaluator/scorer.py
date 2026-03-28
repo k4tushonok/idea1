@@ -1,8 +1,8 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import statistics
 import random
 import json
-from functools import lru_cache
+import hashlib
 from tqdm import tqdm
 
 from evaluator.metrics import (
@@ -54,11 +54,26 @@ class PromptScorer:
             self._weights_by_max_stage[max_stage] = {m["name"]: m["weight"] for m in active}
 
         self._last_eval_examples: Optional[List[Example]] = None
-        
-        try:
-            self.llm.invoke = lru_cache(maxsize=10000)(self.llm.invoke)
-        except Exception:
-            print("Failed to apply LLM invoke caching")
+
+        self._eval_cache: Dict[Tuple[str, str, int], "Metrics"] = {}
+        self._edit_distance_cache: Dict[frozenset, float] = {}
+
+    @staticmethod
+    def _hash_prompt(prompt: str) -> str:
+        return hashlib.md5(prompt.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _hash_examples(examples: List[Example]) -> str:
+        """Быстрый хеш набора примеров по input_text для идентификации батча"""
+        h = hashlib.md5()
+        for ex in examples:
+            h.update(ex.input_text[:200].encode('utf-8'))
+        return h.hexdigest()
+
+    def clear_eval_cache(self):
+        """Очистка кешей evaluate_prompt и edit_distance (между поколениями)"""
+        self._eval_cache.clear()
+        self._edit_distance_cache.clear()
 
     def _sample_examples(self, examples: List[Example], seed_offset: int = 0) -> List[Example]:
         """Семплирование подмножества примеров для оценки"""
@@ -235,7 +250,16 @@ class PromptScorer:
             eval_examples = self._sample_examples(examples, seed_offset)
         else:
             eval_examples = examples
-        
+
+        p_hash = self._hash_prompt(prompt)
+        e_hash = self._hash_examples(eval_examples)
+        cache_key = (p_hash, e_hash, stage)
+        cached = self._eval_cache.get(cache_key)
+        if cached is not None:
+            if is_enabled():
+                print(f"[diag] evaluate_prompt: cache HIT (stage={stage})")
+            return cached
+
         if execute:
             eval_examples = [
                 Example(input_text=ex.input_text, expected_output=ex.expected_output)
@@ -327,6 +351,8 @@ class PromptScorer:
                 f"evaluate_prompt", metrics, stage,
                 _calls_start, _calls_end, _elapsed,
             )
+
+        self._eval_cache[cache_key] = metrics
 
         return metrics
 
@@ -451,22 +477,32 @@ class PromptScorer:
         0.0 — промпты эквивалентны по смыслу и структуре
         1.0 — промпты принципиально разные
         """
+        h1 = self._hash_prompt(prompt1)
+        h2 = self._hash_prompt(prompt2)
+        pair_key = frozenset((h1, h2))
+        if pair_key in self._edit_distance_cache:
+            return self._edit_distance_cache[pair_key]
 
         if USE_LLM_EDIT_DISTANCE:
             template = Templates.load_template("evaluation")
             prompt = template.format(prompt1=prompt1, prompt2=prompt2)
             try:
                 result = self.llm.invoke(prompt=prompt)
-                return max(0.0, min(1.0, float(result)))
+                dist = max(0.0, min(1.0, float(result)))
+                self._edit_distance_cache[pair_key] = dist
+                return dist
             except Exception as e:
                 print(f"LLM distance evaluation failed, falling back: {e}")
 
         words1 = set(prompt1.lower().split())
         words2 = set(prompt2.lower().split())
         if not words1 and not words2:
-            return 0.0
-        similarity = len(words1 & words2) / max(len(words1 | words2), 1)
-        return 1.0 - similarity
+            dist = 0.0
+        else:
+            similarity = len(words1 & words2) / max(len(words1 | words2), 1)
+            dist = 1.0 - similarity
+        self._edit_distance_cache[pair_key] = dist
+        return dist
 
     def calculate_pairwise_metric(self, nodes: List[PromptNode], max_distance_pairs: int) -> List[float]:
         """Попарные семантические расстояния между узлами"""

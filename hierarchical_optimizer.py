@@ -84,6 +84,8 @@ class HierarchicalOptimizer:
             
             generation_start_time = time.time()
             llm_calls_gen_start = getattr(self.llm, 'total_api_calls', 0)
+
+            self.scorer.clear_eval_cache()
             
             # ЛОКАЛЬНАЯ ОПТИМИЗАЦИЯ
             
@@ -292,21 +294,6 @@ class HierarchicalOptimizer:
         print(f"  Improvement: +{best_score - initial_score:.3f} ({((best_score - initial_score) / max(initial_score, 0.01) * 100):.1f}%)")
         print(f"  Total time: {total_time:.2f}s")
         print(f"  Generations: {generation}")
-        
-        # Финальная оценка на тестовом наборе
-        if test_examples:
-            print(f"\nTest Set Evaluation (Stage 3):")
-            test_metrics = self.scorer.evaluate_prompt(
-                self.best_node.prompt_text,
-                test_examples,
-                execute=True,
-                sample=False,
-                stage=3,
-            )
-            print(f"  Test composite score: {test_metrics.composite_score():.3f}")
-            for name, value in sorted(test_metrics.metrics.items()):
-                print(f"  Test {name}: {value:.3f}")
-            self.best_node.metadata["test_metrics"] = test_metrics.to_dict()
         
         # Сохранение результатов
         if save_dir:
