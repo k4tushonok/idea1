@@ -51,6 +51,7 @@ htmlcov/
 
 # Project-specific
 optimization_results/
+optimization_results_common_gen/
 *.log
 .cache/
 temp/
