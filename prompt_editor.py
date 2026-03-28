@@ -9,13 +9,14 @@ from config import LOCAL_CANDIDATES_PER_ITERATION
 class PromptEditor:
     """Редактор промптов: генерирует варианты на основе текстовых градиентов"""
 
-    def __init__(self, llm: BaseLLM):
+    def __init__(self, llm: BaseLLM, task_description: str = ""):
         self.llm = llm
         self._cache: Dict[str, str] = {}
+        self.task_description: str = task_description
 
     def generate_variants(self, current_prompt: str, gradient: TextGradient, parent_node: Optional[PromptNode] = None) -> List[PromptNode]:
         """Генерация вариантов промпта на основе текстового градиента"""
-        editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, LOCAL_CANDIDATES_PER_ITERATION)
+        editing_prompt = Templates.build_editing_prompt(current_prompt, gradient, LOCAL_CANDIDATES_PER_ITERATION, task_description=self.task_description)
         if is_enabled():
             print(
                 f"[diag] generate_variants: base_prompt_id={prompt_id(current_prompt)} "

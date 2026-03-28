@@ -17,14 +17,15 @@ from diagnostics import (
 from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
-    def __init__(self):
+    def __init__(self, metrics_config=None, task_description: str = ""):
         self.llm = create_llm()
         self.history = HistoryManager()
-        self.scorer = PromptScorer(llm=self.llm)
-        self.gradient_gen = TextGradientGenerator(llm=self.llm)
-        self.editor = PromptEditor(llm=self.llm)
+        self.task_description = task_description
+        self.scorer = PromptScorer(llm=self.llm, metrics_config=metrics_config)
+        self.gradient_gen = TextGradientGenerator(llm=self.llm, task_description=task_description)
+        self.editor = PromptEditor(llm=self.llm, task_description=task_description)
         self.local_optimizer = LocalOptimizer(history_manager=self.history, scorer=self.scorer, gradient_generator=self.gradient_gen, prompt_editor=self.editor, llm=self.llm)
-        self.global_optimizer = GlobalOptimizer(history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, llm=self.llm)
+        self.global_optimizer = GlobalOptimizer(history_manager=self.history, scorer=self.scorer, prompt_editor=self.editor, llm=self.llm, task_description=task_description)
         
         # Метаданные оптимизации
         self.start_time = None
@@ -97,16 +98,18 @@ class HierarchicalOptimizer:
             
             new_candidates = []
             
-            # Оптимизируем только лучший узел популяции (остальные проходят без изменений)
-            best_pop_node = max(population, key=lambda n: n.selection_score())
+            # Оптимизируем top-2 узла популяции (или всех, если <= 2)
+            sorted_pop = sorted(population, key=lambda n: n.selection_score(), reverse=True)
+            nodes_to_optimize = set(n.id for n in sorted_pop[:2])
             
-            for i, node in enumerate(population, 1):
-                if node.id != best_pop_node.id:
+            for i, node in enumerate(sorted_pop, 1):
+                if node.id not in nodes_to_optimize:
                     # Сохраняем неоптимизированные узлы для разнообразия
                     new_candidates.append(node)
                     continue
                     
-                print(f"\n  Optimizing best node (score: {node.selection_score():.3f})")
+                rank_label = "best" if i == 1 else f"#{i}"
+                print(f"\n  Optimizing {rank_label} node (score: {node.selection_score():.3f})")
                 if is_enabled():
                     print(
                         f"[diag] population node: node_id={node.id} "
@@ -130,11 +133,11 @@ class HierarchicalOptimizer:
                     )
                     
                     delta = improved_node.selection_score() - node.selection_score()
-                    print(f"  Best node score: {node.selection_score():.3f} → {improved_node.selection_score():.3f} (Δ {delta:+.3f})")
+                    print(f"  Node {rank_label} score: {node.selection_score():.3f} → {improved_node.selection_score():.3f} (Δ {delta:+.3f})")
                     new_candidates.append(improved_node)
                     
                 except Exception as e:
-                    print(f"  Error in local optimization: {e}")
+                    print(f"  Error in local optimization for {rank_label}: {e}")
                     new_candidates.append(node)
             
             # ГЛОБАЛЬНАЯ ОПТИМИЗАЦИЯ (если триггер сработал)
@@ -292,6 +295,8 @@ class HierarchicalOptimizer:
         )
         full_val_score = full_val_metrics.composite_score()
         print(f"  Full validation score: {full_val_score:.3f}")
+        for name, value in sorted(full_val_metrics.metrics.items()):
+            print(f"    {name}: {value:.3f}")
         self.best_node.metadata["full_validation_score"] = full_val_score
         self.best_node.metadata["full_validation_metrics"] = full_val_metrics.to_dict()
 
@@ -325,14 +330,21 @@ class HierarchicalOptimizer:
                 )
             failures_block = "\n".join(failure_lines)
         
+        task_ctx = f"TASK: {self.task_description}\n\n" if self.task_description else ""
         reflection_prompt = (
             "You are a prompt optimization strategist. Analyze the optimization progress "
             "and provide DIRECTIVE instructions for the next step.\n\n"
+            f"{task_ctx}"
             f"PREVIOUS BEST PROMPT (Score: {prev_best.selection_score():.3f}):\n"
             f"```\n{prev_best.prompt_text}\n```\n\n"
             f"CURRENT BEST PROMPT (Score: {curr_best.selection_score():.3f}):\n"
             f"```\n{curr_best.prompt_text}\n```\n\n"
         )
+
+        if curr_best.is_evaluated and hasattr(curr_best.metrics, 'metrics') and curr_best.metrics.metrics:
+            metric_lines = [f"  {k}: {v:.3f}" for k, v in sorted(curr_best.metrics.metrics.items())]
+            reflection_prompt += "CURRENT METRIC BREAKDOWN:\n" + "\n".join(metric_lines) + "\n\n"
+
         if failures_block:
             reflection_prompt += (
                 "KEY REMAINING FAILURES:\n"
@@ -340,11 +352,11 @@ class HierarchicalOptimizer:
             )
         reflection_prompt += (
             "Provide a DIRECTIVE reflection (3-5 sentences):\n"
-            "1. What specific structural change caused the improvement?\n"
-            "2. What is the PRIMARY remaining weakness pattern?\n"
-            "3. Give ONE specific structural modification to try next (be concrete: "
-            "e.g., 'add a constraint that forces X format when Y condition')\n"
-            "4. What should definitely NOT be changed (preserve what works)?\n"
+            "1. What specific change caused the improvement (or lack thereof)?\n"
+            "2. Which specific metric is weakest and what is the root cause?\n"
+            "3. Give ONE concrete modification to try next (be specific: "
+            "e.g., 'add a constraint that forces extracting the exact span from context')\n"
+            "4. Does the current prompt cover the COMPLETE task, or is it only addressing a sub-problem?\n"
             "Be concise and actionable. No vague advice."
         )
         
@@ -357,7 +369,8 @@ class HierarchicalOptimizer:
             return ""
     
     def _select_population(self, candidates: List[PromptNode], population_size: int) -> List[PromptNode]:
-        """Отбор популяции: дедупликация по тексту, затем top-K по score"""
+        """Отбор популяции: дедупликация по тексту, затем diversity-aware selection.
+        Всегда берёт лучшего по score, затем выбирает оставшихся с учётом разнообразия"""
         if len(candidates) <= population_size:
             return candidates
         
@@ -370,11 +383,38 @@ class HierarchicalOptimizer:
                 seen_pids.add(pid)
                 unique.append(c)
         
-        selected = unique[:population_size]
+        if len(unique) <= population_size:
+            return unique
+        
+        # Всегда берём лучший по score
+        selected = [unique[0]]
+        remaining = unique[1:]
+        
+        # Для остальных слотов: балансируем score и разнообразие
+        from config import DIVERSITY_WEIGHT
+        while len(selected) < population_size and remaining:
+            best_combined = None
+            best_combined_score = -1.0
+            for candidate in remaining:
+                score = candidate.selection_score()
+                # Среднее расстояние до уже отобранных
+                avg_dist = sum(
+                    self.scorer.calculate_edit_distance(candidate.prompt_text, s.prompt_text)
+                    for s in selected
+                ) / len(selected)
+                combined = score + DIVERSITY_WEIGHT * avg_dist
+                if combined > best_combined_score:
+                    best_combined_score = combined
+                    best_combined = candidate
+            if best_combined:
+                selected.append(best_combined)
+                remaining.remove(best_combined)
+            else:
+                break
         
         print(f"  Selected population ({len(selected)}):")
-        if selected:
-            print(f"    Best: {selected[0].selection_score():.3f} (generation {selected[0].generation})")
+        for i, s in enumerate(selected):
+            print(f"    #{i+1}: {s.selection_score():.3f} (gen {s.generation}, source {s.source.value})")
         
         return selected
     

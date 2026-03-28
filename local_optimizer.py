@@ -165,9 +165,9 @@ class LocalOptimizer:
             evaluated_candidates = self._evaluate_candidates(top_candidates, validation_examples)
             print(f"Evaluated {len(evaluated_candidates)} candidates")
             
-            # Порог качества: средний композитный score beam как базовый уровень
+            # Порог качества: средний score в beam
             beam_scores = [n.selection_score() for n in current_beam]
-            baseline_score = sum(beam_scores) / len(beam_scores)
+            baseline_score = sum(beam_scores) / len(beam_scores) * 0.95
             eligible_candidates = [
                 c for c in evaluated_candidates
                 if c.selection_score() >= baseline_score

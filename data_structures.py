@@ -48,7 +48,7 @@ class Example:
             pass
 
         if not USE_LLM_CORRECTNESS_CHECK:
-            return self._is_similar_locally(self.actual_output, self.expected_output)
+            return self._is_similar_locally(self.actual_output, self.expected_output, self.metadata)
 
         cache_key = (self.actual_output.strip().lower(), self.expected_output.strip().lower())
         if cache_key in Example._correctness_cache:
@@ -74,14 +74,22 @@ class Example:
             return False
 
     @staticmethod
-    def _is_similar_locally(actual: str, expected: str) -> bool:
-        """Token-F1 + containment check"""
+    def _is_similar_locally(actual: str, expected: str, metadata: Dict[str, Any] = None) -> bool:
+        """Token-F1 + containment check + concept coverage for generation tasks"""
+        import re as _re
         if actual is None or expected is None:
             return False
         actual_clean = actual.strip().lower()
         expected_clean = expected.strip().lower()
         if not actual_clean or not expected_clean:
             return False
+        # 0. Concept coverage for generation tasks
+        if metadata and isinstance(metadata, dict) and "concepts" in metadata:
+            concepts = metadata["concepts"]
+            if concepts:
+                covered = sum(1 for c in concepts if _re.search(r'\b' + _re.escape(c.lower()), actual_clean))
+                if covered >= len(concepts):
+                    return True
         # 1. Containment: if expected is a substring of actual, it's correct
         if USE_CONTAINMENT_CHECK and expected_clean in actual_clean:
             return True

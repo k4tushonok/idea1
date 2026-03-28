@@ -42,11 +42,12 @@ from config import (TOP_BEST_NODES,
                     GLOBAL_OPTIMIZER_TEMPERATURE)
     
 class GlobalOptimizer:
-    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM):
+    def __init__(self, history_manager: HistoryManager, scorer: PromptScorer, prompt_editor: PromptEditor, llm: BaseLLM, task_description: str = ""):
         self.history = history_manager
         self.scorer = scorer
         self.editor = prompt_editor
         self.llm = llm
+        self.task_description: str = task_description
         
         # Статистика глобальной оптимизации
         self.total_global_steps = 0
@@ -144,6 +145,11 @@ class GlobalOptimizer:
                 f"Filtered out {len(evaluated_candidates) - len(valid_for_refinement)} global candidates "
                 f"below composite gate {best_composite:.3f}"
             )
+        
+        if not valid_for_refinement and evaluated_candidates:
+            top_eval = sorted(evaluated_candidates, key=lambda c: c.selection_score(), reverse=True)[:2]
+            valid_for_refinement = top_eval
+            print(f"  No candidates passed quality gate — promoting top {len(valid_for_refinement)} for local refinement (scores={[f'{c.selection_score():.3f}' for c in valid_for_refinement]})")
 
         # Анализируем только допустимых кандидатов
         print("\nStep 4: Analyzing results...")
@@ -421,6 +427,7 @@ class GlobalOptimizer:
             history_nodes, best_node, exemplars, few_shot_examples,
             reflection_context=self.reflection_context,
             failed_directions=history_analysis.get("failed_directions"),
+            task_description=self.task_description,
         )
 
         # Если застой — усилить сигнал на диверсификацию
@@ -533,7 +540,7 @@ class GlobalOptimizer:
                     print(f"[diag] crossover pair {i+1} skipped: similarity={similarity:.3f} > threshold")
                 continue
             
-            crossover_prompt = Templates.build_crossover_prompt(parent_a, parent_b)
+            crossover_prompt = Templates.build_crossover_prompt(parent_a, parent_b, task_description=self.task_description)
             
             try:
                 raw = self.llm.invoke(prompt=crossover_prompt, temperature=GLOBAL_OPTIMIZER_TEMPERATURE)
@@ -629,7 +636,7 @@ class GlobalOptimizer:
                 print(f"[diag] prescreen gate: best_stage1={best_stage1.composite_score():.3f} "
                       f"× {GLOBAL_PRESCREEN_GATE} = {gate_score:.3f}")
         
-        passed = []
+        scored_candidates = []
         for i, candidate in enumerate(candidates, 1):
             try:
                 metrics = self.scorer.evaluate_prompt(
@@ -641,15 +648,22 @@ class GlobalOptimizer:
                 print(f"  Pre-screen global {i}/{len(candidates)}: {score:.3f} (gate={gate_score:.3f}, stage 1)", end="")
                 if did_pass:
                     print(" ✓ passed")
-                    passed.append(candidate)
                 else:
-                    print(" ✗ filtered")
+                    print(" ✗ below gate")
+                scored_candidates.append((candidate, score, did_pass))
                 if is_enabled():
                     print_gate_comparison(
                         f"global_prescreen_{i}", score, gate_score, stage=1, passed=did_pass,
                     )
             except Exception as e:
                 print(f"  Pre-screen error {i}: {e}")
+
+        passed = [c for c, s, p in scored_candidates if p]
+        
+        if not passed and scored_candidates:
+            top_scored = sorted(scored_candidates, key=lambda x: x[1], reverse=True)[:2]
+            passed = [c for c, s, p in top_scored]
+            print(f"  No candidates passed gate — promoting top {len(passed)} candidates (scores={[f'{s:.3f}' for _, s, _ in top_scored]})")
         
         if is_enabled():
             _gps_elapsed = _t.time() - _gps_t0

@@ -1,6 +1,13 @@
-You are optimizing an instruction for a language model that answers questions based on provided context passages. The task is extractive QA: answer from context, or "No answer" if unanswerable.
+You are optimizing an instruction for a language model.
 
-Below are previous instructions sorted by score from worst to best (0–100). Study the trend of improvement — understand what made higher-scoring instructions better:
+TASK: {task_description}
+
+Your goal is to produce an instruction that maximizes task performance across ALL aspects of the task.
+The task may have multiple sub-problems (e.g., extracting an answer AND detecting when no answer exists).
+The new instruction MUST handle all sub-problems correctly — not just the most common one.
+
+Below are previous instructions sorted by score from worst to best (0–100).
+Study what structural changes caused score improvements:
 
 <HISTORY>
 {history_block}
@@ -8,25 +15,28 @@ Below are previous instructions sorted by score from worst to best (0–100). St
 
 Current best score: {best_score:.1f}
 {reflection_block}
-These questions are answered WRONG by the current best instruction:
+These inputs are handled WRONG by the current best instruction — the new instruction MUST fix these:
 
 <WRONG_EXAMPLES>
 {exemplars_block}
 </WRONG_EXAMPLES>
 
-These questions are answered CORRECTLY (the new instruction MUST still handle these well):
+These inputs are handled CORRECTLY — the new instruction MUST still handle these well:
 
 <FEW_SHOT_EXAMPLES>
 {few_shot_block}
 </FEW_SHOT_EXAMPLES>
 
 Generate a NEW instruction that scores higher than {best_score:.1f}.
-Requirements:
-- Study the score progression above: higher-scoring instructions share certain structural patterns — build on them
-- Handle both answerable questions (extract answer from context) and unanswerable questions (output only "No answer")
-- Be concise but precise (1–4 sentences)
-- Fix the failure patterns shown in WRONG_EXAMPLES while preserving what works in FEW_SHOT_EXAMPLES
-- Try a STRUCTURALLY DIFFERENT approach from existing instructions, not just rephrasing
-- Consider: explicit format constraints, disambiguation rules, step-by-step reasoning cues
 
-Wrap your instruction in <INS> and </INS> tags.
+KEY REQUIREMENTS:
+1. The instruction must address the COMPLETE task: "{task_description}".
+   Every scenario the task can present must be handled — including edge cases and secondary scenarios.
+2. Study the score progression: understand what structural patterns made higher-scoring instructions better.
+3. Fix the failure patterns in WRONG_EXAMPLES while preserving what works in FEW_SHOT_EXAMPLES.
+4. Be concise but precise (1–5 sentences). Every sentence must serve a purpose.
+5. Try a MEANINGFULLY DIFFERENT approach — not just a rephrasing of the best instruction.
+6. Consider: explicit output format constraints, disambiguation rules, step-by-step reasoning, coverage requirements.
+7. Do NOT copy specific answers, names, dates, or entities from the examples into the instruction.
+
+Wrap your instruction in <INS> and </INS> tags. Output nothing else.

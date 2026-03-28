@@ -1,5 +1,7 @@
 You are an expert prompt optimization strategist. Analyze the optimization history and propose exactly 4 high-level strategies for making significant improvements.
 
+TASK BEING OPTIMIZED: {task_description}
+
 OPTIMIZATION HISTORY:
 
 Current State:
@@ -38,11 +40,14 @@ Unexplored Areas:
 {unexplored_space_block}
 
 YOUR TASK:
-Generate exactly 4 global optimization strategies that could lead to breakthrough improvements. These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
+Generate exactly 4 global optimization strategies that could lead to breakthrough improvements.
+These should be STRUCTURAL and HIGH-LEVEL changes, not small tweaks.
 Anchor each strategy in the evidence above (e.g., leverage common phrases, avoid worst prompt patterns, address stagnation/diversity).
 
 TASK CONTRACT:
-- All strategies must preserve the core task the prompt is designed to perform.
+- All strategies must preserve the core task: "{task_description}".
+- If the task has multiple sub-problems (e.g., answerable AND unanswerable scenarios), every strategy
+  must produce a prompt that handles ALL sub-problems — not just the dominant one in the history.
 - Do not suggest strategies that change what the model is asked to do.
 
 OUTPUT FORMAT:
@@ -54,4 +59,3 @@ RATIONALE: [Why this strategy should work based on the history]
 SPECIFIC_ACTION: [Concrete description of what to change in the prompt text]
 
 Now generate exactly 4 strategies:
-

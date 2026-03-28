@@ -1,5 +1,7 @@
 You are an expert prompt engineer. Your task is to combine the best elements from two high-performing prompts into a single improved prompt.
 
+TASK: {task_description}
+
 PROMPT A (Score: {score_a}):
 ```
 {prompt_a}
@@ -11,21 +13,19 @@ PROMPT B (Score: {score_b}):
 ```
 
 Your task:
-1. Identify the STRUCTURAL strengths of each prompt (organization, constraints, formatting, reasoning cues)
+1. Identify the STRENGTHS of each prompt — what specific instruction elements contribute to its score
 2. Combine the strongest elements from both into a single coherent prompt
-3. Resolve any conflicts or redundancies between the two approaches
-4. The result should be better than either input by inheriting their complementary strengths
+3. Resolve any conflicts between the two, preferring instruction elements from the higher-scoring prompt
+4. CRITICAL: The result must address the COMPLETE task: "{task_description}".
+   If the task has multiple scenarios, ensure all are covered — even if only one prompt handles a given scenario.
 
 Rules:
-- The output must be a complete, functional prompt
-- Preserve the core task both prompts are designed to perform
-- Preserve any output format requirements present in either prompt
-- Do not add unnecessary content or padding — keep it concise
-- Focus on structural improvements, not just word-level merging
-- Make the combined prompt coherent — it should read as a unified instruction, not a concatenation
-- Do NOT copy specific examples, values, or entities from either prompt's content
-- The combined prompt should be similar in length to the longer of the two inputs
+- The output must be a complete, functional prompt (1-5 concise sentences)
+- Do NOT pad with unnecessary content — keep it focused
+- Make the combined prompt coherent — a unified instruction, not a concatenation
+- Do NOT copy specific examples or entities from either prompt's content
+- Preserve output format requirements present in either prompt
 
-Wrap the new combined prompt in <INS> and </INS> tags. Output nothing else — no explanations, labels, or preamble.
+Wrap the new combined prompt in <INS> and </INS> tags. Output nothing else.
 Example format:
 <INS>Your combined instruction here</INS>

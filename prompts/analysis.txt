@@ -1,12 +1,15 @@
 You are an expert prompt engineer analyzing why a prompt fails on certain examples.
 
+TASK BEING OPTIMIZED: {task_description}
+
 CURRENT PROMPT:
 ```
 {current_prompt}
 ```
 
-TASK:
-Analyze the failures below and provide actionable recommendations for improving the prompt.
+IMPORTANT: The prompt must address the COMPLETE task described above.
+If the task has multiple sub-problems (e.g., extract an answer AND detect when no answer exists),
+the prompt must handle ALL sub-problems — not just the one causing the current failures.
 
 FAILURE EXAMPLES (where the prompt produced incorrect outputs):
 
@@ -25,19 +28,18 @@ Please provide your analysis in the following structured format:
 Describe what specifically is going wrong with the current prompt. Be concrete and specific.
 - What patterns do you see in the failures?
 - What is the prompt missing or doing incorrectly?
+- Does the prompt cover ALL sub-problems of the task, or is it focused on only one?
 - Are there any ambiguities or unclear instructions?
 
 ## SUGGESTED DIRECTION
 Describe the semantic direction in which the prompt should be modified.
 - What concepts or constraints should be added?
 - What aspects need clarification or emphasis?
-- What examples or patterns should be incorporated?
+- How should the prompt balance ALL parts of the task (not just the failing part)?
 
 ## SPECIFIC SUGGESTIONS
 Provide 3-5 concrete, actionable suggestions for modifying the prompt.
-Each suggestion must describe a STRUCTURAL change, not a wording tweak.
-Bad: "Use clearer language" — this is vague.
-Good: "Add an explicit instruction: if the answer is not in the context, output exactly 'No answer'" — this is structural.
+Each suggestion should clearly describe WHAT to change and WHY it helps.
 1. [First specific suggestion]
 2. [Second specific suggestion]
 3. [Third specific suggestion]
@@ -51,7 +53,8 @@ Rate the urgency of these changes from 0.0 to 1.0, where:
 - 0.3 = Minor refinements
 Priority: [your rating]
 
-CRITICAL: Prefer high-impact structural changes (restructure the order, add constraints, change formatting) over tiny wording tweaks.
-Focus on being specific, actionable, and grounded in the examples provided.
-Do NOT suggest copying specific answers, names, or entities from the examples into the prompt.
-Suggestions must help the prompt generalize to ALL inputs, not just these specific cases.
+CRITICAL RULES:
+- Focus on making the prompt handle the FULL task well, not just the failing subset.
+- Do NOT suggest copying specific answers, names, or entities from the examples into the prompt.
+- Suggestions must help the prompt generalize to ALL inputs, not just these specific cases.
+- Adding explicit output format constraints or decision boundaries IS a valid high-impact change.

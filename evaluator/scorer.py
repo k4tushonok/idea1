@@ -262,7 +262,7 @@ class PromptScorer:
 
         if execute:
             eval_examples = [
-                Example(input_text=ex.input_text, expected_output=ex.expected_output)
+                Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata) if ex.metadata else {})
                 for ex in eval_examples
             ]
 

@@ -281,6 +281,268 @@ class EfficiencyMetric(LLMJudgeMetric):
         )
 
 
+class ConceptCoverageMetric(CheapMetric):
+    name = "concept_coverage"
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            concepts = self._extract_concepts(ex)
+            if not concepts:
+                scores.append(0.0)
+                continue
+            actual_lower = ex.actual_output.strip().lower()
+            covered = 0
+            for c in concepts:
+                c_lower = c.lower()
+                if re.search(r'\b' + re.escape(c_lower), actual_lower):
+                    covered += 1
+            scores.append(covered / len(concepts))
+        return sum(scores) / len(scores) if scores else 0.0
+
+    @staticmethod
+    def _extract_concepts(ex: Example) -> list:
+        if ex.metadata and "concepts" in ex.metadata:
+            return ex.metadata["concepts"]
+        match = re.search(r'[Cc]oncepts?:\s*(.+)', ex.input_text)
+        if match:
+            return [w.strip() for w in match.group(1).split(',') if w.strip()]
+        return ex.input_text.strip().split()
+
+
+class RougeLMetric(CheapMetric):
+    name = "rouge_l"
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            references = [ex.expected_output]
+            if ex.metadata and "references" in ex.metadata:
+                references = ex.metadata["references"]
+            refs = [r for r in references if r]
+            if not refs:
+                scores.append(0.0)
+                continue
+            best = max(self._rouge_l_f1(ex.actual_output, ref) for ref in refs)
+            scores.append(best)
+        return sum(scores) / len(scores) if scores else 0.0
+
+    @staticmethod
+    def _rouge_l_f1(prediction: str, reference: str) -> float:
+        pred_tokens = prediction.strip().lower().split()
+        ref_tokens = reference.strip().lower().split()
+        if not pred_tokens or not ref_tokens:
+            return 0.0
+        lcs_len = RougeLMetric._lcs_length(pred_tokens, ref_tokens)
+        if lcs_len == 0:
+            return 0.0
+        precision = lcs_len / len(pred_tokens)
+        recall = lcs_len / len(ref_tokens)
+        return 2 * precision * recall / (precision + recall)
+
+    @staticmethod
+    def _lcs_length(x: list, y: list) -> int:
+        m, n = len(x), len(y)
+        prev = [0] * (n + 1)
+        for i in range(1, m + 1):
+            curr = [0] * (n + 1)
+            for j in range(1, n + 1):
+                if x[i - 1] == y[j - 1]:
+                    curr[j] = prev[j - 1] + 1
+                else:
+                    curr[j] = max(curr[j - 1], prev[j])
+            prev = curr
+        return prev[n]
+
+
+class FluencyMetric(LLMJudgeMetric):
+    name = "fluency"
+
+    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
+        return (
+            "You are a language quality evaluator.\n"
+            "Evaluate whether the following text is grammatically correct, "
+            "natural-sounding, and fluent in English.\n\n"
+            f"TEXT: {actual}\n\n"
+            "Return ONLY a single number: 1.0 if perfectly fluent, "
+            "0.0 if incomprehensible, or a value in between."
+        )
+
+
+class CompositionQualityMetric(LLMJudgeMetric):
+    name = "composition_quality"
+
+    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
+        return (
+            "You are an impartial judge evaluating compositional text generation.\n\n"
+            f"INPUT CONCEPTS: {input_text}\n\n"
+            f"REFERENCE: {expected}\n\n"
+            f"GENERATED: {actual}\n\n"
+            "Evaluate the GENERATED text:\n"
+            "1. Does it use ALL given concepts naturally?\n"
+            "2. Is it grammatically correct and fluent?\n"
+            "3. Is it coherent and meaningful?\n"
+            "4. Is it concise?\n\n"
+            "Return ONLY a single number between 0.0 and 1.0."
+        )
+
+
+class SPICEMetric(CheapMetric):
+    name = "spice"
+
+    _STOPWORDS = frozenset({
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+        "should", "may", "might", "can", "could", "must",
+        "and", "but", "or", "nor", "not", "so", "yet",
+        "in", "on", "at", "to", "for", "of", "with", "by", "from",
+        "as", "into", "through", "during", "before", "after",
+        "that", "which", "who", "whom", "this", "these", "those",
+        "it", "its", "he", "she", "his", "her", "they", "them", "their",
+        "i", "me", "my", "we", "us", "our", "you", "your",
+    })
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            references = [ex.expected_output]
+            if ex.metadata and "references" in ex.metadata:
+                references = ex.metadata["references"]
+            refs = [r for r in references if r]
+            if not refs:
+                scores.append(0.0)
+                continue
+            best = max(self._spice_f1(ex.actual_output, ref) for ref in refs)
+            scores.append(best)
+        return sum(scores) / len(scores) if scores else 0.0
+
+    @classmethod
+    def _extract_tuples(cls, text: str) -> set:
+        tokens = text.strip().lower().split()
+        content_tokens = [t for t in tokens if t not in cls._STOPWORDS]
+        if not content_tokens:
+            content_tokens = tokens
+        tuples_set = set()
+        tuples_set.update(content_tokens)
+        for i in range(len(content_tokens) - 1):
+            tuples_set.add((content_tokens[i], content_tokens[i + 1]))
+        for i in range(len(content_tokens) - 2):
+            tuples_set.add((content_tokens[i], content_tokens[i + 1], content_tokens[i + 2]))
+        return tuples_set
+
+    @classmethod
+    def _spice_f1(cls, prediction: str, reference: str) -> float:
+        pred_tuples = cls._extract_tuples(prediction)
+        ref_tuples = cls._extract_tuples(reference)
+        if not pred_tuples or not ref_tuples:
+            return 0.0
+        common = len(pred_tuples & ref_tuples)
+        if common == 0:
+            return 0.0
+        precision = common / len(pred_tuples)
+        recall = common / len(ref_tuples)
+        return 2 * precision * recall / (precision + recall)
+
+
+class DiversityMetric(LLMJudgeMetric):
+    name = "diversity"
+
+    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
+        return (
+            "You are a language diversity evaluator.\n\n"
+            f"INPUT CONCEPTS: {input_text}\n\n"
+            f"GENERATED TEXT: {actual}\n\n"
+            "Evaluate lexical and structural diversity of the generated text:\n"
+            "- Does it use varied vocabulary beyond the given concepts?\n"
+            "- Does it avoid repetitive or formulaic phrasing?\n"
+            "- Is the sentence structure interesting rather than trivially simple?\n\n"
+            "Return ONLY a single number between 0.0 and 1.0."
+        )
+
+
+class NoAnswerAccuracyMetric(CheapMetric):
+    name = "no_answer_accuracy"
+
+    _NO_ANSWER_VARIANTS = {
+        "no answer", "noanswer", "n/a", "unanswerable",
+        "cannot be answered", "not enough information",
+        "no answer.", "no answer!",
+    }
+
+    @classmethod
+    def _is_no_answer(cls, text: str) -> bool:
+        if text is None:
+            return False
+        cleaned = text.strip().lower().rstrip(".!")
+        return cleaned in cls._NO_ANSWER_VARIANTS
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            expected_na = self._is_no_answer(ex.expected_output)
+            actual_na = self._is_no_answer(ex.actual_output)
+            if expected_na:
+                # Should produce 'No answer'
+                scores.append(1.0 if actual_na else 0.0)
+            else:
+                # Should NOT produce 'No answer'
+                scores.append(1.0 if not actual_na else 0.0)
+        return sum(scores) / len(scores) if scores else 0.0
+
+
+class SemanticSimilarityMetric(LLMJudgeMetric):
+    name = "semantic_similarity"
+
+    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
+        return (
+            "You are an impartial judge evaluating semantic similarity.\n\n"
+            f"INPUT:\n{input_text}\n\n"
+            f"EXPECTED OUTPUT:\n{expected}\n\n"
+            f"ACTUAL OUTPUT:\n{actual}\n\n"
+            "Rate how semantically similar the ACTUAL OUTPUT is to the EXPECTED OUTPUT.\n"
+            "- 1.0 = identical meaning (even if different words)\n"
+            "- 0.7-0.9 = mostly the same meaning with minor differences\n"
+            "- 0.3-0.6 = partially overlapping meaning\n"
+            "- 0.0-0.2 = completely different meaning\n\n"
+            "Return ONLY a single number between 0.0 and 1.0."
+        )
+
+
+class FaithfulnessMetric(LLMJudgeMetric):
+    name = "faithfulness"
+
+    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
+        return (
+            "You are an impartial judge evaluating answer faithfulness.\n\n"
+            f"CONTEXT AND QUESTION:\n{input_text}\n\n"
+            f"MODEL ANSWER:\n{actual}\n\n"
+            "Evaluate whether the MODEL ANSWER is faithful to the given context:\n"
+            "- Is the answer grounded in the context (not hallucinated)?\n"
+            "- Does the answer avoid adding information not present in the context?\n"
+            "- If the context doesn't contain the answer, does the model correctly "
+            "indicate that?\n\n"
+            "Return ONLY a single number between 0.0 (completely hallucinated) "
+            "and 1.0 (perfectly faithful to context)."
+        )
+
+
 METRIC_REGISTRY: Dict[str, type] = {
     "exact_match": ExactMatchMetric,
     "accuracy": AccuracyMetric,
@@ -291,6 +553,15 @@ METRIC_REGISTRY: Dict[str, type] = {
     "safety": SafetyMetric,
     "robustness": RobustnessMetric,
     "efficiency": EfficiencyMetric,
+    "concept_coverage": ConceptCoverageMetric,
+    "rouge_l": RougeLMetric,
+    "fluency": FluencyMetric,
+    "composition_quality": CompositionQualityMetric,
+    "spice": SPICEMetric,
+    "diversity": DiversityMetric,
+    "no_answer_accuracy": NoAnswerAccuracyMetric,
+    "semantic_similarity": SemanticSimilarityMetric,
+    "faithfulness": FaithfulnessMetric,
 }
 
 
@@ -311,6 +582,28 @@ _CRITERIA_DESCRIPTIONS: Dict[str, str] = {
     "efficiency": (
         "How concise and efficient the response is. "
         "Penalize verbosity, redundancy, and unnecessary filler."
+    ),
+    "fluency": (
+        "Whether the text is grammatically correct, natural-sounding, and fluent. "
+        "1.0 = perfectly fluent, 0.0 = incomprehensible."
+    ),
+    "composition_quality": (
+        "How well the input concepts are woven into a coherent, meaningful sentence. "
+        "Consider concept usage, grammaticality, coherence, and conciseness."
+    ),
+    "diversity": (
+        "Lexical and structural diversity of the generated text. "
+        "Penalize repetitive or formulaic phrasing; reward varied vocabulary "
+        "and interesting sentence structure."
+    ),
+    "semantic_similarity": (
+        "Semantic similarity between ACTUAL and EXPECTED output. "
+        "1.0 = identical meaning (even if different words), "
+        "0.0 = completely different meaning."
+    ),
+    "faithfulness": (
+        "Whether the answer is faithful to and grounded in the source context. "
+        "1.0 = perfectly grounded, 0.0 = completely hallucinated or unsupported."
     ),
 }
 

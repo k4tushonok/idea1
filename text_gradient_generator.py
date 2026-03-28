@@ -10,18 +10,19 @@ from config import LOCAL_MAX_EXAMPLES, LOCAL_BATCH_SIZE, LOCAL_CANDIDATES_PER_IT
 class TextGradientGenerator:
     """Генератор текстовых градиентов: анализирует провалы промпта и предлагает направления улучшения"""
 
-    def __init__(self, llm: BaseLLM):
+    def __init__(self, llm: BaseLLM, task_description: str = ""):
         self.llm = llm
         self._cache: Dict[str, str] = {}
         # Рефлексия из предыдущего поколения
         self.reflection_context: str = ""
+        self.task_description: str = task_description
 
     def generate_gradient(self, current_prompt: str, failure_examples: List[Example], success_examples: List[Example] = None, context: Optional[Dict] = None) -> TextGradient:
         """Генерация одного текстового градиента"""
         if not failure_examples:
             raise ValueError("Need at least one failure example to generate gradient")
 
-        analysis_prompt = Templates.build_analysis_prompt(current_prompt, failure_examples, success_examples, context, LOCAL_MAX_EXAMPLES)
+        analysis_prompt = Templates.build_analysis_prompt(current_prompt, failure_examples, success_examples, context, LOCAL_MAX_EXAMPLES, task_description=self.task_description)
         if is_enabled():
             print(
                 f"[diag] generate_gradient: prompt_id={prompt_id(current_prompt)} "
@@ -78,7 +79,7 @@ class TextGradientGenerator:
                 cluster_names.append(f"cluster_{i}")
 
         gradients = []
-        combined_prompt = Templates.build_gradients_batch_prompt(current_prompt, batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES, reflection_context=self.reflection_context)
+        combined_prompt = Templates.build_gradients_batch_prompt(current_prompt, batches, cluster_names, success_examples, max_count=LOCAL_MAX_EXAMPLES, reflection_context=self.reflection_context, task_description=self.task_description)
         if is_enabled():
             print(
                 f"[diag] generate_gradients_batch: prompt_id={prompt_id(current_prompt)} "
@@ -121,7 +122,7 @@ class TextGradientGenerator:
         if len(failure_examples) < FAILURE_EXAMPLE_LIMIT:
             return {"all": failure_examples}
 
-        clustering_prompt = Templates.build_clustering_prompt(failure_examples, max_count=LOCAL_MAX_EXAMPLES)
+        clustering_prompt = Templates.build_clustering_prompt(failure_examples, max_count=LOCAL_MAX_EXAMPLES, task_description=self.task_description)
         if is_enabled():
             print(
                 f"[diag] cluster_failure_types: failures={len(failure_examples)} "
