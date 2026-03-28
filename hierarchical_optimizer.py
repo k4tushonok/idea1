@@ -139,7 +139,7 @@ class HierarchicalOptimizer:
             
             # ГЛОБАЛЬНАЯ ОПТИМИЗАЦИЯ (если триггер сработал)
             
-            if self.global_optimizer.should_trigger_global_step(generation):
+            if self.global_optimizer.should_trigger_global_step(generation, generations_without_improvement):
                 print(f"\nPhase 2: Global Optimization (Triggered)")
                 
                 try:
@@ -177,9 +177,13 @@ class HierarchicalOptimizer:
                             except Exception as e:
                                 print(f"    Error refining: {e}")
                                 new_candidates.append(global_candidate)
+                    else:
+                        print("  Global optimization returned no candidates")
                     
                 except Exception as e:
+                    import traceback
                     print(f"Error in global optimization: {e}")
+                    traceback.print_exc()
             
             else:
                 print(f"\nPhase 2: Global Optimization (Skipped)")

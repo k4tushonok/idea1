@@ -74,6 +74,9 @@ class GlobalOptimizer:
             )
         
         start_time = time.time()
+        self.total_global_steps += 1
+
+        self._seen_prompt_hashes.clear()
         
         # Шаг 1: Анализ истории оптимизации
         print("Step 1: Analyzing optimization history...")
@@ -121,7 +124,6 @@ class GlobalOptimizer:
         
         if not prescreened:
             print("All global candidates filtered by pre-screen — skipping full evaluation")
-            self.total_global_steps += 1
             return []
         
         print(f"\nStep 3b: Full evaluation of {len(prescreened)}/{len(candidates)} pre-screened candidates...")
@@ -149,8 +151,6 @@ class GlobalOptimizer:
         self._analyze_global_results(candidates_to_analyze, history_analysis)
 
         print(f"\nCompleted in {time.time() - start_time:.2f}s")
-
-        self.total_global_steps += 1
 
         if is_enabled():
             print_candidates_summary(f"global evaluated candidates gen={current_generation}", evaluated_candidates)
@@ -422,6 +422,17 @@ class GlobalOptimizer:
             reflection_context=self.reflection_context,
             failed_directions=history_analysis.get("failed_directions"),
         )
+
+        # Если застой — усилить сигнал на диверсификацию
+        stagnation = history_analysis.get("stagnation", {})
+        if stagnation.get("is_stagnant") or stagnation.get("avg_similarity", 0) > 0.6:
+            meta_prompt += (
+                "\n\nCRITICAL: The optimization is STAGNATING. All recent prompts are very similar "
+                "semantic variations of the same approach. You MUST generate a STRUCTURALLY DIFFERENT "
+                "prompt that uses a fundamentally different strategy. DO NOT simply rephrase the current best. "
+                "Try a completely different angle: different instruction structure, different emphasis, "
+                "different handling of edge cases, different output format guidance."
+            )
         if is_enabled():
             print(
                 f"[diag] meta-optimizer: history_nodes={len(history_nodes)} "
@@ -722,18 +733,25 @@ class GlobalOptimizer:
         else:
             print("\n✗ No improvements from global step")     
     
-    def should_trigger_global_step(self, current_generation: int) -> bool:
+    def should_trigger_global_step(self, current_generation: int, stagnation_gens: int = 0) -> bool:
         """Определение, нужно ли запускать глобальный шаг"""
+        from config import FORCE_GLOBAL_AFTER_STAGNATION
+
         # Триггер 1: Регулярный интервал
         if current_generation % GLOBAL_TRIGGER_INTERVAL == 0:
             if is_enabled():
                 print(f"[diag] global trigger: interval (gen={current_generation} % {GLOBAL_TRIGGER_INTERVAL} == 0)")
             return True
+
+        # Триггер 2: Форсированный глобальный шаг при стагнации
+        if stagnation_gens >= FORCE_GLOBAL_AFTER_STAGNATION:
+            print(f"Global step FORCED by stagnation ({stagnation_gens} gens without improvement)")
+            return True
         
-        # Триггер 2: Обнаружен застой
+        # Триггер 3: Обнаружен застой в истории
         stagnation_info = self.history.get_stagnation_info()
         if stagnation_info["is_stagnant"]:
-            print("Global step triggered by stagnation")
+            print("Global step triggered by history stagnation")
             return True
             
         return False
