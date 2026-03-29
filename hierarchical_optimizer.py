@@ -96,6 +96,8 @@ class HierarchicalOptimizer:
             
             new_candidates = []
             
+            best_score_before_local = self.best_node.selection_score()
+
             print(f"\n  Optimizing best node (score: {self.best_node.selection_score():.3f})")
             try:
                 self.local_optimizer._evaluated_prompts.clear()
@@ -126,7 +128,8 @@ class HierarchicalOptimizer:
                     global_candidates = self.global_optimizer.optimize(
                         current_generation=generation,
                         train_examples=train_examples,
-                        validation_examples=validation_examples
+                        validation_examples=validation_examples,
+                        baseline_score=best_score_before_local,
                     )
                     
                     if global_candidates:

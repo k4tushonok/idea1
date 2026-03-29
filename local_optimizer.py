@@ -41,6 +41,86 @@ class LocalOptimizer:
         self._train_outcomes_cache: Dict[str, Tuple] = {}
         self._evaluated_prompts: Set[str] = set()
         self.llm = llm
+
+    @staticmethod
+    def _normalize_gradient_text(text: str) -> str:
+        return " ".join((text or "").lower().split())
+
+    def _select_gradients(self, gradients: List[TextGradient], max_pairs: int) -> List[TextGradient]:
+        if max_pairs <= 0 or not gradients:
+            return []
+        if len(gradients) <= max_pairs:
+            return gradients
+
+        unique_gradients: List[TextGradient] = []
+        seen_feedback = set()
+        for gradient in gradients:
+            key = self._normalize_gradient_text(gradient.error_analysis)
+            if not key or key in seen_feedback:
+                continue
+            seen_feedback.add(key)
+            unique_gradients.append(gradient)
+
+        pool = unique_gradients or gradients
+        if len(pool) <= max_pairs:
+            return pool
+
+        selected: List[TextGradient] = []
+        covered_failures: Set[str] = set()
+
+        while pool and len(selected) < max_pairs:
+            best_idx = 0
+            best_key = None
+
+            for idx, gradient in enumerate(pool):
+                failure_ids = {ex.input_text for ex in gradient.failure_examples}
+                new_coverage = len(failure_ids - covered_failures)
+                rank_key = (
+                    float(gradient.priority),
+                    new_coverage,
+                    len(failure_ids),
+                    len((gradient.error_analysis or "").strip()),
+                )
+                if best_key is None or rank_key > best_key:
+                    best_key = rank_key
+                    best_idx = idx
+
+            chosen = pool.pop(best_idx)
+            selected.append(chosen)
+            covered_failures.update(ex.input_text for ex in chosen.failure_examples)
+
+        return selected
+
+    @staticmethod
+    def _example_search_score(ex: Example) -> float:
+        if ex.actual_output is None:
+            return 0.0
+        if ex.metadata and "all_answers" in ex.metadata:
+            return 0.8 * ex.qa_exact_match_score() + 0.2 * ex.qa_token_f1_score()
+        if ex.metadata and "references" in ex.metadata and "concepts" in ex.metadata:
+            return ex.generation_optimization_score()
+        return 1.0 if ex.is_success_for_optimization() else 0.0
+
+    def _select_failure_examples(self, failures: List[Example], limit: int) -> List[Example]:
+        if len(failures) <= limit:
+            return failures
+
+        ranked = sorted(failures, key=self._example_search_score)
+
+        hardest_k = max(1, limit // 2)
+        selected = ranked[:hardest_k]
+        remainder = ranked[hardest_k:]
+
+        slots_left = limit - len(selected)
+        if slots_left <= 0 or not remainder:
+            return selected[:limit]
+
+        step = len(remainder) / slots_left
+        for i in range(slots_left):
+            idx = min(int(i * step), len(remainder) - 1)
+            selected.append(remainder[idx])
+
+        return selected[:limit]
     
     def optimize(self, starting_node: PromptNode, train_examples: List[Example], validation_examples: List[Example]) -> PromptNode:
         print(f"\n{'='*60}")
@@ -109,8 +189,15 @@ class LocalOptimizer:
                 if not gradients:
                     continue
 
+                selected_gradients = self._select_gradients(gradients, MAX_GRADIENT_PAIRS)
+                if is_enabled():
+                    print(
+                        f"[diag] beam[{b_idx}] selected_gradients: "
+                        f"{len(selected_gradients)}/{len(gradients)}"
+                    )
+
                 new_task_sections: List[PromptNode] = []
-                for g_idx, gradient in enumerate(gradients[:MAX_GRADIENT_PAIRS], 1):
+                for g_idx, gradient in enumerate(selected_gradients, 1):
                     try:
                         variants = self.editor.generate_variants(parent.prompt_text, gradient, parent_node=parent)
                         if is_enabled():
@@ -140,28 +227,43 @@ class LocalOptimizer:
                 combined = new_task_sections + mc_sampled
                 combined = list({prompt_id(n.prompt_text): n for n in combined}.values())  # dedup
 
-                # Ограничение expansion factor + error rejection
-                if len(combined) > MAX_EXPANSION_FACTOR:
-                    if REJECT_ON_ERRORS and failure_examples:
-                        # Оцениваем кандидатов на ошибках
-                        error_exs = random.sample(
-                            failure_examples,
-                            min(len(failure_examples), 16),
-                        )
-                        error_scores = self._score_on_error_examples(combined, error_exs)
-                        ranked = sorted(
-                            zip(combined, error_scores),
-                            key=lambda x: x[1],
-                            reverse=True,
-                        )
-                        combined = [c for c, _ in ranked[:MAX_EXPANSION_FACTOR]]
-                        if is_enabled():
-                            print(
-                                f"[diag] beam[{b_idx}] reject_on_errors: "
-                                f"scored {len(ranked)} → kept {len(combined)}"
-                            )
+                # REJECT_ON_ERRORS: отбрасываем кандидатов, которые не
+                # улучшают исправление текущих ошибок относительно родителя.
+                if combined and REJECT_ON_ERRORS and failure_examples:
+                    error_exs = random.sample(
+                        failure_examples,
+                        min(len(failure_examples), 16),
+                    )
+                    parent_error_score = self._score_on_error_examples([parent], error_exs)[0]
+                    error_scores = self._score_on_error_examples(combined, error_exs)
+                    ranked = sorted(
+                        zip(combined, error_scores),
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )
+                    improved = [
+                        (c, s) for c, s in ranked
+                        if s > parent_error_score + 1e-8
+                    ]
+                    if improved:
+                        combined = [c for c, _ in improved]
                     else:
-                        combined = random.sample(combined, MAX_EXPANSION_FACTOR)
+                        combined = []
+                    if is_enabled():
+                        print(
+                            f"[diag] beam[{b_idx}] reject_on_errors ranking: "
+                            f"parent={parent_error_score:.3f} "
+                            f"scored={len(ranked)} kept={len(combined)} "
+                            f"scores={scores_summary(error_scores)}"
+                        )
+
+                if len(combined) > MAX_EXPANSION_FACTOR:
+                    combined = combined[:MAX_EXPANSION_FACTOR]
+                    if is_enabled():
+                        print(
+                            f"[diag] beam[{b_idx}] expansion cap: kept {len(combined)} "
+                            f"of {MAX_EXPANSION_FACTOR}"
+                        )
 
                 all_candidates.extend(combined)
                 print(f"    Beam member {b_idx}: {len(combined)} candidates (variants + synonyms)")
@@ -293,7 +395,7 @@ class LocalOptimizer:
         failures: List[Example] = []
         successes: List[Example] = []
         for ex in executed_examples:
-            if ex.actual_output and (ex.is_correct() or ex.is_correct_by_llm(self.llm)):
+            if ex.is_success_for_optimization():
                 successes.append(ex)
             else:
                 failures.append(ex)
@@ -301,11 +403,7 @@ class LocalOptimizer:
         real_rate = len(failures) / max(len(executed_examples), 1)
         print(f"Train failures: {len(failures)}/{len(executed_examples)} ({real_rate:.1%}) [sampled from {len(examples)}]")
 
-        if len(failures) > LOCAL_BATCH_SIZE:
-            step = len(failures) / LOCAL_BATCH_SIZE
-            failures_for_gradient = [failures[int(i * step)] for i in range(LOCAL_BATCH_SIZE)]
-        else:
-            failures_for_gradient = failures
+        failures_for_gradient = self._select_failure_examples(failures, LOCAL_BATCH_SIZE)
 
         if is_enabled():
             print(
@@ -409,12 +507,8 @@ class LocalOptimizer:
                     for ex in error_examples
                 ]
                 executed = self.scorer.execute_prompt_batch(c.prompt_text, eval_exs)
-                correct = sum(
-                    1
-                    for ex in executed
-                    if ex.actual_output and (ex.is_correct() or ex.is_correct_by_llm(self.llm))
-                )
-                scores.append(correct / max(len(executed), 1))
+                mean_score = sum(self._example_search_score(ex) for ex in executed) / max(len(executed), 1)
+                scores.append(mean_score)
             except Exception:
                 scores.append(0.0)
         return scores

@@ -39,11 +39,7 @@ class PromptEditor:
             )
 
         try:
-            if editing_prompt in self._cache:
-                response_text = self._cache[editing_prompt]
-            else:
-                response_text = self.llm.invoke(prompt=editing_prompt)
-                self._cache[editing_prompt] = response_text
+            response_text = self.llm.invoke(prompt=editing_prompt)
 
             # Парсим <START>/<END> теги → список текстов новых промптов
             new_prompts = TaggedTextParser.parse_tagged_text(
@@ -66,7 +62,7 @@ class PromptEditor:
                     continue
 
                 operation = EditOperation(
-                    description=f"ProTeGi apply_gradient: {gradient.error_analysis[:80]}",
+                    description=f"apply_gradient: {gradient.error_analysis[:80]}",
                     gradient_source=gradient,
                     before_snippet=current_prompt[:200] + "...",
                     after_snippet=new_prompt_text[:200] + "...",
@@ -128,14 +124,7 @@ class PromptEditor:
         nodes: List[PromptNode] = []
         for _ in range(n):
             try:
-                if synonym_prompt in self._cache:
-                    response = self._cache[synonym_prompt]
-                    # Если кэшировано — один и тот же результат, дальше нет смысла
-                    if len(nodes) > 0:
-                        break
-                else:
-                    response = self.llm.invoke(prompt=synonym_prompt)
-                    self._cache[synonym_prompt] = response
+                response = self.llm.invoke(prompt=synonym_prompt)
 
                 new_text = response.strip()
                 try:
@@ -147,6 +136,8 @@ class PromptEditor:
                     continue
                 # Не дублируем оригинал
                 if new_text.strip().lower() == prompt_text.strip().lower():
+                    continue
+                if any(n.prompt_text.strip().lower() == new_text.strip().lower() for n in nodes):
                     continue
 
                 operation = EditOperation(

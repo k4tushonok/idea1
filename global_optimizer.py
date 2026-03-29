@@ -19,6 +19,7 @@ from config import (TOP_BEST_NODES,
                     SIMILARITY_THRESHOLD,
                     GLOBAL_TRIGGER_INTERVAL,
                     MIN_IMPROVEMENT,
+                    GLOBAL_MIN_IMPROVEMENT,
                     GLOBAL_HISTORY_WINDOW,
                     EXEMPLAR_COUNT,
                     HISTORY_SCORE_THRESHOLD,
@@ -51,8 +52,9 @@ class GlobalOptimizer:
         self._failure_examples_cache: Dict[str, Example] = {}
         self._processed_node_ids: set = set()
         self._seen_prompt_hashes: set = set()
+        self._baseline_score_override: Optional[float] = None
         
-    def optimize(self, current_generation: int, train_examples: List[Example], validation_examples: List[Example]) -> List[PromptNode]:
+    def optimize(self, current_generation: int, train_examples: List[Example], validation_examples: List[Example], baseline_score: Optional[float] = None) -> List[PromptNode]:
         print("\n" + "=" * 60)
         print(f"GLOBAL OPTIMIZATION STEP | Generation {current_generation}")
         print("=" * 60)
@@ -66,7 +68,8 @@ class GlobalOptimizer:
         self.total_global_steps += 1
 
         self._seen_prompt_hashes.clear()
-        
+        self._baseline_score_override = baseline_score
+
         # Шаг 1: Анализ истории оптимизации
         print("Step 1: Analyzing optimization history...")
         history_analysis = self._analyze_history()
@@ -96,20 +99,30 @@ class GlobalOptimizer:
             print("No candidates generated — skipping evaluation")
             return []
 
-        # Шаг 3: Full evaluation of all candidates on training set
-        print(f"\nStep 3: Full evaluation of {len(candidates)} candidates on training set...")
-        evaluated_candidates = self._evaluate_global_candidates(candidates, train_examples)
+        # Шаг 3: Full evaluation of all candidates on validation set
+        print(f"\nStep 3: Full evaluation of {len(candidates)} candidates on validation set...")
+        evaluated_candidates = self._evaluate_global_candidates(candidates, validation_examples)
+        previous_best_score = history_analysis["summary"]["best_nodes"][0]["score"] if history_analysis["summary"]["best_nodes"] else 0.0
+        accepted_candidates = [
+            candidate for candidate in evaluated_candidates
+            if candidate.selection_score() >= previous_best_score + GLOBAL_MIN_IMPROVEMENT
+        ]
 
         # Шаг 4: Анализируем результаты
         print("\nStep 4: Analyzing results...")
         self._analyze_global_results(evaluated_candidates, history_analysis)
+        if is_enabled():
+            print(
+                f"[diag] global acceptance: accepted={len(accepted_candidates)}/{len(evaluated_candidates)} "
+                f"threshold={previous_best_score + GLOBAL_MIN_IMPROVEMENT:.3f}"
+            )
 
         print(f"\nCompleted in {time.time() - start_time:.2f}s")
 
         if is_enabled():
             print_candidates_summary(f"global evaluated candidates gen={current_generation}", evaluated_candidates)
 
-        return evaluated_candidates
+        return accepted_candidates
     
     def _analyze_history(self) -> Dict:
         """Анализ всей истории оптимизации. Определяет паттерны, проблемы и возможности"""
@@ -327,7 +340,9 @@ class GlobalOptimizer:
                 continue
 
             if "<INS>" not in raw:
-                start_index = 0
+                if is_enabled():
+                    print(f"[diag] call {call_idx+1}: no <INS> tag in response, skipping")
+                continue
             else:
                 start_index = raw.index("<INS>") + len("<INS>")
             if "</INS>" not in raw:
@@ -341,10 +356,10 @@ class GlobalOptimizer:
                     print(f"[diag] call {call_idx+1}: empty extraction, skipping")
                 continue
 
-            # Skip INS artifacts
-            if "INS" in new_text:
+            # Skip if the extracted text still contains raw <INS> tags (artifact)
+            if "<INS>" in new_text or "</INS>" in new_text:
                 if is_enabled():
-                    print(f"[diag] call {call_idx+1}: contains 'INS' artifact, skipping")
+                    print(f"[diag] call {call_idx+1}: contains INS tag artifact, skipping")
                 continue
             if len(new_text) > MAX_INSTRUCTION_LENGTH:
                 if is_enabled():
@@ -396,7 +411,7 @@ class GlobalOptimizer:
         return candidates
     
     def _evaluate_global_candidates(self, candidates: List[PromptNode], examples: List[Example]) -> List[PromptNode]:
-        """Оценка глобальных кандидатов на training set. Точное совпадение текста промпта → переиспользуем метрики из истории."""
+        """Оценка глобальных кандидатов на validation set. Точное совпадение текста промпта → переиспользуем метрики из истории."""
         evaluated = []
         for i, candidate in enumerate(candidates, 1):
             print(f"  Evaluating global candidate {i}/{len(candidates)}...", end=" ")
@@ -415,7 +430,7 @@ class GlobalOptimizer:
                     score = candidate.metrics.composite_score()
                     print(f"Score: {score:.3f} (cached)")
                 else:
-                    candidate = self.scorer.evaluate_node(candidate, examples, execute=True, split="train")
+                    candidate = self.scorer.evaluate_node(candidate, examples, execute=True, split="validation")
                     score = candidate.metrics.composite_score()
                     print(f"Score: {score:.3f}")
                 self.history.add_node(candidate)
@@ -432,8 +447,12 @@ class GlobalOptimizer:
             print("No candidates to analyze")
             return
         
-        # Сравниваем с лучшим до глобального шага
-        previous_best_score = history_analysis["summary"]["best_nodes"][0]["score"] if history_analysis["summary"]["best_nodes"] else 0.0
+        if getattr(self, "_baseline_score_override", None) is not None:
+            previous_best_score = self._baseline_score_override
+            if is_enabled():
+                print(f"[diag] _analyze_global_results: using baseline_score_override={previous_best_score:.3f}")
+        else:
+            previous_best_score = history_analysis["summary"]["best_nodes"][0]["score"] if history_analysis["summary"]["best_nodes"] else 0.0
         
         print("\n--- Global Step Results ---")
         print(f"Previous best score: {previous_best_score:.3f}")

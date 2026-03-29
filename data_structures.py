@@ -8,8 +8,10 @@ import string as _string
 
 from config import (
     METRIC_WEIGHTS,
-    CORRECTNESS_TOKEN_F1_THRESHOLD
+    CORRECTNESS_TOKEN_F1_THRESHOLD,
 )
+
+_NO_ANSWER_VARIANTS = ["", "no answer", "no answer."]
 
 def _normalize_answer(s: str) -> str:
     def remove_articles(text):
@@ -39,28 +41,161 @@ class Example:
     actual_output: Optional[str] = None                     # Фактический результат 
     metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные
     
+    def _gold_answers(self) -> List[str]:
+        all_ans = self.metadata.get("all_answers") if self.metadata else None
+        if all_ans is not None:
+            gold_list = [a for a in all_ans if _normalize_answer(a)]
+            return gold_list if gold_list else _NO_ANSWER_VARIANTS
+        if self.expected_output is None:
+            return _NO_ANSWER_VARIANTS
+        if self.expected_output.strip().lower() in ("no answer", "no answer.", ""):
+            return _NO_ANSWER_VARIANTS
+        return [self.expected_output]
+
+    @staticmethod
+    def _compute_token_f1(actual: str, expected: str) -> float:
+        from collections import Counter as _Counter
+
+        actual_norm = _normalize_answer(actual)
+        expected_norm = _normalize_answer(expected)
+        a_tokens = actual_norm.split()
+        e_tokens = expected_norm.split()
+
+        if not a_tokens or not e_tokens:
+            return float(a_tokens == e_tokens)
+
+        common = sum((_Counter(a_tokens) & _Counter(e_tokens)).values())
+        if common == 0:
+            return 0.0
+
+        precision = common / len(a_tokens)
+        recall = common / len(e_tokens)
+        return 2 * precision * recall / (precision + recall)
+
     def is_correct(self) -> bool:
         """Проверка корректности ответа"""
         if self.actual_output is None:
             return False
-        all_ans = self.metadata.get("all_answers") if self.metadata else None
-        if all_ans is not None:
-            gold_list = [a for a in all_ans if _normalize_answer(a)]
-            if not gold_list:
-                gold_list = ['']
-        elif self.expected_output is not None and self.expected_output.strip().lower() == 'no answer':
-            gold_list = ['']
-        else:
-            gold_list = [self.expected_output] if self.expected_output else ['']
+        gold_list = self._gold_answers()
         return any(
             _normalize_answer(gold) == _normalize_answer(self.actual_output)
             for gold in gold_list
         )
 
+    def qa_exact_match_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        actual_norm = _normalize_answer(self.actual_output)
+        return max(
+            float(_normalize_answer(gold) == actual_norm)
+            for gold in self._gold_answers()
+        )
+
+    def qa_token_f1_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        return max(
+            self._compute_token_f1(self.actual_output, gold)
+            for gold in self._gold_answers()
+        )
+
+    def generation_concept_coverage_score(self) -> float:
+        if self.actual_output is None or not self.metadata or "concepts" not in self.metadata:
+            return 0.0
+        concepts = self.metadata.get("concepts") or []
+        if not concepts:
+            return 0.0
+        actual_norm = _normalize_answer(self.actual_output)
+        covered = sum(
+            1 for c in concepts
+            if _re.search(r'\b' + _re.escape(c.lower()) + r'\w*\b', actual_norm)
+        )
+        return covered / len(concepts)
+
+    @staticmethod
+    def _lcs_length(x: List[str], y: List[str]) -> int:
+        m, n = len(x), len(y)
+        prev = [0] * (n + 1)
+        for i in range(1, m + 1):
+            curr = [0] * (n + 1)
+            for j in range(1, n + 1):
+                if x[i - 1] == y[j - 1]:
+                    curr[j] = prev[j - 1] + 1
+                else:
+                    curr[j] = max(curr[j - 1], prev[j])
+            prev = curr
+        return prev[n]
+
+    @classmethod
+    def _rouge_l_f1(cls, prediction: str, reference: str) -> float:
+        pred_tokens = _normalize_answer(prediction).split()
+        ref_tokens = _normalize_answer(reference).split()
+        if not pred_tokens or not ref_tokens:
+            return 0.0
+        lcs_len = cls._lcs_length(pred_tokens, ref_tokens)
+        if lcs_len == 0:
+            return 0.0
+        precision = lcs_len / len(pred_tokens)
+        recall = lcs_len / len(ref_tokens)
+        return 2 * precision * recall / (precision + recall)
+
+    def generation_reference_token_f1_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        references = []
+        if self.metadata and "references" in self.metadata:
+            references = [r for r in self.metadata["references"] if r]
+        elif self.expected_output:
+            references = [self.expected_output]
+        if not references:
+            return 0.0
+        return max(self._compute_token_f1(self.actual_output, ref) for ref in references)
+
+    def generation_reference_rouge_l_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        references = []
+        if self.metadata and "references" in self.metadata:
+            references = [r for r in self.metadata["references"] if r]
+        elif self.expected_output:
+            references = [self.expected_output]
+        if not references:
+            return 0.0
+        return max(self._rouge_l_f1(self.actual_output, ref) for ref in references)
+
+    def generation_optimization_score(self) -> float:
+        coverage = self.generation_concept_coverage_score()
+        ref_f1 = self.generation_reference_token_f1_score()
+        rouge_l = self.generation_reference_rouge_l_score()
+        return 0.55 * coverage + 0.25 * ref_f1 + 0.20 * rouge_l
+
+    def is_generation_success(self) -> bool:
+        if self.actual_output is None:
+            return False
+        coverage = self.generation_concept_coverage_score()
+        if coverage < 1.0:
+            return False
+        return self.generation_optimization_score() >= 0.68
+
+    def is_strict_qa_success(self) -> bool:
+        if self.actual_output is None:
+            return False
+        return self.qa_exact_match_score() >= 1.0
+
+    def is_success_for_optimization(self) -> bool:
+        """Сигнал успеха для split на success/failure и mining ошибок"""
+        if self.actual_output is None:
+            return False
+        if self.metadata and "all_answers" in self.metadata:
+            return self.is_strict_qa_success()
+        if self.metadata and "references" in self.metadata and "concepts" in self.metadata:
+            return self.is_generation_success()
+        return self.is_correct() or self.is_correct_heuristic()
+
     _correctness_cache: ClassVar[Dict[tuple, bool]] = {}
 
-    def is_correct_by_llm(self, llm) -> bool:
-        """Проверка корректности ответа (с кешированием)"""
+    def is_correct_heuristic(self) -> bool:
+        """Проверка корректности ответа эвристически (token-F1 + containment)"""
         if self.actual_output is None:
             return False
 

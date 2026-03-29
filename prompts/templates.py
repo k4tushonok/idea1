@@ -105,10 +105,10 @@ class Templates:
         history_block = "\n\n".join(history_lines)
 
         if exemplars:
-            ex_lines = ["Below are some problems."]
+            ex_lines = ["Below are some example problems the instruction must solve."]
             for ex in exemplars:
                 ex_lines.append(
-                    f"\ninput:\n<INS>\n{ex.input_text[:300]}\n\n"
+                    f"\nInput:\n{ex.input_text[:300]}\n\n"
                     f"Ground truth answer:\n{ex.expected_output}"
                 )
             exemplars_block = "\n".join(ex_lines) + "\n"

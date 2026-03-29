@@ -1,17 +1,18 @@
-LOCAL_PARENTS_PER_ITERATION: int = 2     # Сколько лучших узлов использовать как «родителей»
+LOCAL_PARENTS_PER_ITERATION: int = 4     # Сколько лучших узлов использовать как «родителей»
 MINI_BATCH_RATIO: float = 0.5            # Доля валидационных примеров для предварительного отбора
 N_GRADIENTS: int = 4                     # Количество итераций семплирования ошибок для градиентов
 ERRORS_PER_GRADIENT: int = 4             # Число примеров ошибок на один градиент
 GRADIENTS_PER_ERROR: int = 1             # Число feedback-причин на один набор ошибок
 STEPS_PER_GRADIENT: int = 1              # Число новых промптов на один feedback
 MC_SAMPLES_PER_STEP: int = 2             # Monte Carlo synonym samples на каждый вариант
-MAX_EXPANSION_FACTOR: int = 8            # Максимум кандидатов на beam member перед фильтрацией
+MAX_EXPANSION_FACTOR: int = 6            # Максимум кандидатов на beam member перед фильтрацией
 REJECT_ON_ERRORS: bool = True            # Фильтровать кандидатов по ошибкам
-TEMPERATURE: float = 0.0                 # Температура для LLM
-LOCAL_BATCH_SIZE: int = 10               # Максимальное число failure-примеров в одном батче
+TEMPERATURE: float = 0.1                 # Температура для LLM
+EVAL_TEMPERATURE: float = 0.0            # Температура для evaluation / failure mining
+LOCAL_BATCH_SIZE: int = 12               # Максимальное число failure-примеров в одном батче
 MAX_GRADIENT_PAIRS: int = 2              # Макс. пар градиент-родитель за одну локальную итерацию
-PRE_SCREEN_TOP_K: int = 3                # Сколько кандидатов полностью оценивать после предварительного отбора
-TRAIN_FAILURE_SAMPLE_SIZE: int = 50      # Сколько примеров сэмплировать из train для поиска ошибок
+PRE_SCREEN_TOP_K: int = 4                # Сколько кандидатов полностью оценивать после предварительного отбора
+TRAIN_FAILURE_SAMPLE_SIZE: int = 80      # Сколько примеров сэмплировать из train для поиска ошибок
 DEFAULT_PRIORITY: float = 0.5            # Приоритет градиента по умолчанию
 
 # Стратегия выбора wrong-exemplars для мета-промпта:
@@ -19,16 +20,17 @@ DEFAULT_PRIORITY: float = 0.5            # Приоритет градиента
 # "current_most_frequent"      — топ-K по счётчику провалов среди инструкций мета-промпта
 # "random"                     — случайная выборка, seed = current_generation (default)
 # "constant"                   — фиксированная случайная выборка, seed = 0
-EXEMPLAR_SELECTION_STRATEGY: str = "random"
+EXEMPLAR_SELECTION_STRATEGY: str = "accumulative_most_frequent"
 GLOBAL_CANDIDATES: int = 8               # Ширина глобального поиска
 GLOBAL_HISTORY_WINDOW: int = 20          # Сколько узлов истории анализировать
 GLOBAL_OPTIMIZER_TEMPERATURE: float = 1.0 # Температура LLM для глобального оптимизатора
+GLOBAL_MIN_IMPROVEMENT: float = 0.01      # Минимальный прирост для принятия global-кандидата
 EXEMPLAR_COUNT: int = 3                  # Число QA-exemplars в мета-промпте
 HISTORY_SCORE_THRESHOLD: float = 0.3     # Порог: 0.0 — все инструкции
 MAX_INSTRUCTION_LENGTH: int = 500        # Макс. длина инструкции
 STAGNATION_SIMILARITY_THRESHOLD: float = 0.7 # Порог сходства для диагностики застоя
 
-MAX_GENERATIONS: int = 6                 # Максимальное число поколений
+MAX_GENERATIONS: int = 4                 # Максимальное число поколений
 LOCAL_ITERATIONS_PER_GENERATION: int = 2 # Количество локальных итераций
 GLOBAL_TRIGGER_INTERVAL: int = 2         # Каждые N поколений запускать глобальную оптимизацию
 PATIENCE: int = 2                        # Поколений без улучшения до остановки
@@ -42,9 +44,10 @@ API_KEY = ""                             # Ключ API провайдера
 MODEL = "gpt-3.5-turbo"                  # Модель LLM
 
 MAX_EXAMPLES_PER_NODE: int = 100         # Максимальное число примеров на узел
-BATCH_EVAL_SIZE: int = 50                # Размер батча для групповых LLM-запросов при оценке
+BATCH_EVAL_SIZE: int = 25                # Размер батча для групповых LLM-запросов при оценке
 JUDGE_BATCH_SIZE: int = 25               # Размер батча для LLM-judge (stage 3)
 CORRECTNESS_TOKEN_F1_THRESHOLD: float = 0.5  # Порог token-F1 для определения правильности
+STRICT_QA_TOKEN_F1_THRESHOLD: float = 0.8 # Per-example сигнал для QA split / failure mining
 MIN_LIST_ITEM_LENGTH: int = 5            # Мин. длина элемента списка в ответе LLM
 MIN_PROMPT_LENGTH: int = 20              # Минимальная длина валидного промпта
 TOP_BEST_NODES: int = 5                  # Количество лучших узлов
@@ -59,8 +62,8 @@ COMMON_WORD_MIN_FREQ: int = 3            # Минимальная частота
 ENABLE_DIAGNOSTIC_LOGS: bool = True      # Включить диагностическое логирование
 
 SQUAD_METRICS = [
-    {"name": "exact_match",         "weight": 0.5, "stage": 1},
-    {"name": "token_f1",            "weight": 0.5, "stage": 1},
+    {"name": "exact_match",         "weight": 0.8, "stage": 1},
+    {"name": "token_f1",            "weight": 0.2, "stage": 1},
 ]
 GENERATION_METRICS = [
     {"name": "concept_coverage",  "weight": 0.55, "stage": 1},

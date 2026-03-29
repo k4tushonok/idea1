@@ -51,19 +51,22 @@ def compute_f1(a_gold: str, a_pred: str) -> float:
     return f1
 
 
+_NO_ANSWER_VARIANTS: List[str] = ['', 'no answer', 'no answer.']
+
+
 def _get_gold_answers(ex: Example) -> List[str]:
     all_ans = ex.metadata.get("all_answers") if ex.metadata else None
     if all_ans is not None:
         # Filter out empty-after-normalization, keep unique
         filtered = [a for a in all_ans if normalize_answer(a)]
         if not filtered:
-            return ['']  # unanswerable
+            return _NO_ANSWER_VARIANTS
         return filtered
     # Fallback: single expected_output
     if ex.expected_output is None:
-        return ['']
-    if ex.expected_output.strip().lower() == 'no answer':
-        return ['']
+        return _NO_ANSWER_VARIANTS
+    if ex.expected_output.strip().lower() in ('no answer', 'no answer.', ''):
+        return _NO_ANSWER_VARIANTS
     return [ex.expected_output]
 
 class MetricEvaluator(ABC):
@@ -73,6 +76,9 @@ class MetricEvaluator(ABC):
 
     def __init__(self):
         pass
+
+    def supports_examples(self, examples: List[Example]) -> bool:
+        return True
 
     @abstractmethod
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
@@ -118,7 +124,7 @@ class AccuracyMetric(CheapMetric):
             if ex.actual_output is None:
                 scores.append(0.0)
                 continue
-            correct = ex.is_correct() or ex.is_correct_by_llm(llm)
+            correct = ex.is_correct() or ex.is_correct_heuristic()
             scores.append(1.0 if correct else 0.0)
         return sum(scores) / len(scores) if scores else 0.0
 
@@ -352,6 +358,13 @@ class ConceptCoverageMetric(CheapMetric):
 class RougeLMetric(CheapMetric):
     name = "rouge_l"
 
+    def supports_examples(self, examples: List[Example]) -> bool:
+        return any(
+            (ex.metadata and ex.metadata.get("references"))
+            or ex.expected_output
+            for ex in examples
+        )
+
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
         if not examples:
             return 0.0
@@ -401,6 +414,13 @@ class RougeLMetric(CheapMetric):
 
 class MeteorMetric(CheapMetric):
     name = "meteor"
+
+    def supports_examples(self, examples: List[Example]) -> bool:
+        return any(
+            (ex.metadata and ex.metadata.get("references"))
+            or ex.expected_output
+            for ex in examples
+        )
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
         if not examples:

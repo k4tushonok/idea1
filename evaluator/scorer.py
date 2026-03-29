@@ -1,4 +1,5 @@
 from typing import List, Dict, Optional, Tuple
+from copy import deepcopy
 import statistics
 import random
 import json
@@ -18,6 +19,7 @@ from config import (
     MAX_EXAMPLES_PER_NODE,
     BATCH_EVAL_SIZE,
     JUDGE_BATCH_SIZE,
+    EVAL_TEMPERATURE,
 )
 
 class PromptScorer:
@@ -48,7 +50,7 @@ class PromptScorer:
 
         self._last_eval_examples: Optional[List[Example]] = None
 
-        self._eval_cache: Dict[Tuple[str, str, int], "Metrics"] = {}
+        self._eval_cache: Dict[Tuple[str, str, int], Tuple["Metrics", Optional[List[Example]]]] = {}
         self._edit_distance_cache: Dict[frozenset, float] = {}
 
     @staticmethod
@@ -74,14 +76,18 @@ class PromptScorer:
             return examples
         rnd = random.Random(self.seed + seed_offset)
         return rnd.sample(examples, self.max_examples_per_node)
-    
+
     def execute_prompt_batch(self, prompt: str, examples: List[Example], progress_bar: bool = False) -> List[Example]:
         """Выполнение промпта батчами на массиве примеров"""
         if len(examples) <= 1:
             if is_enabled():
                 print(f"[diag] execute_prompt_batch: single example mode")
             for ex in examples:
-                ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+                ex.actual_output = self.execute_prompt(
+                    prompt,
+                    ex.input_text,
+                    temperature=EVAL_TEMPERATURE,
+                )
             return examples
 
         def chunks(lst, n):
@@ -105,7 +111,10 @@ class PromptScorer:
             batch_prompt = self._build_batch_prompt(prompt, batch)
             parsed = None
             try:
-                raw = self.llm.invoke(prompt=batch_prompt)
+                raw = self.llm.invoke(
+                    prompt=batch_prompt,
+                    temperature=EVAL_TEMPERATURE,
+                )
                 parsed = self._parse_batch_response(raw, len(batch))
             except Exception as e:
                 print(f"Batch execution failed, falling back to single execution: {e}")
@@ -136,7 +145,11 @@ class PromptScorer:
                         f"falling back for {len(missing_indices)} missing)"
                     )
                 for idx in missing_indices:
-                    batch[idx].actual_output = self.execute_prompt(prompt, batch[idx].input_text)
+                    batch[idx].actual_output = self.execute_prompt(
+                        prompt,
+                        batch[idx].input_text,
+                        temperature=EVAL_TEMPERATURE,
+                    )
                 done += len(batch)
                 continue
 
@@ -146,11 +159,19 @@ class PromptScorer:
             if progress_bar:
                 for i, ex in enumerate(tqdm(batch)):
                     print(f"Falling back to single execution for example {i+1}/{len(batch)}")
-                    ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+                    ex.actual_output = self.execute_prompt(
+                        prompt,
+                        ex.input_text,
+                        temperature=EVAL_TEMPERATURE,
+                    )
             else:
                 print(f"Falling back to single execution for {len(batch)} examples")
                 for ex in batch:
-                    ex.actual_output = self.execute_prompt(prompt, ex.input_text)
+                    ex.actual_output = self.execute_prompt(
+                        prompt,
+                        ex.input_text,
+                        temperature=EVAL_TEMPERATURE,
+                    )
             done += len(batch)
 
         if is_enabled():
@@ -164,13 +185,25 @@ class PromptScorer:
 
     def _build_batch_prompt(self, prompt: str, examples: List[Example]) -> str:
         header = (
-            "For each input below, produce the model OUTPUT for that input when using the given PROMPT. "
-            "Return a JSON array of objects with keys 'index' (int) and 'output' (string).\n\n"
+            "You must emulate multiple completely independent assistant calls.\n"
+            "Each item below is a separate fresh interaction with no shared memory.\n"
+            "For item i, pretend the assistant receives exactly one user message and produces exactly one assistant reply.\n"
+            "That user message is shown verbatim between ITEM i USER MESSAGE START and END.\n"
+            "For every item, generate the same reply you would produce if that item were sent alone in a separate call.\n"
+            "Do not compare items, do not combine contexts, do not reuse information across items, and do not add explanations.\n"
+            "Return ONLY a valid JSON array. Each item must be an object with exactly two keys:\n"
+            "- \"index\": the integer input index\n"
+            "- \"output\": the exact assistant reply string for that independent item\n\n"
+            "The array must contain exactly one object for every input index from 0 to N-1.\n"
         )
-        body = [header, "PROMPT:\n", prompt, "\n\n"]
+        body = [header, "\n"]
         for i, ex in enumerate(examples):
-            body.append(f"INPUT {i}:\n{ex.input_text}\n\n")
-        body.append("Return JSON now:")
+            body.append(
+                f"ITEM {i} USER MESSAGE START\n"
+                f"{prompt}\n\nInput:\n{ex.input_text}\n"
+                f"ITEM {i} USER MESSAGE END\n\n"
+            )
+        body.append("Return the JSON array now:")
         return "".join(body)
 
     def _parse_batch_response(self, response_text: str, n_expected: int) -> Optional[List[str]]:
@@ -214,10 +247,11 @@ class PromptScorer:
             print("Failed to parse batch response")
             return None
     
-    def execute_prompt(self, prompt: str, input_text: str) -> str:
+    def execute_prompt(self, prompt: str, input_text: str, temperature: Optional[float] = None) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
-        return self.llm.invoke(prompt=full_prompt)
+        effective_temperature = EVAL_TEMPERATURE if temperature is None else temperature
+        return self.llm.invoke(prompt=full_prompt, temperature=effective_temperature)
 
     def evaluate_prompt(
         self,
@@ -249,13 +283,19 @@ class PromptScorer:
         cache_key = (p_hash, e_hash, stage)
         cached = self._eval_cache.get(cache_key)
         if cached is not None:
+            cached_metrics, cached_examples = cached
             if is_enabled():
                 print(f"[diag] evaluate_prompt: cache HIT (stage={stage})")
-            return cached
+            self._last_eval_examples = deepcopy(cached_examples) if cached_examples is not None else None
+            return cached_metrics
 
         if execute:
             eval_examples = [
-                Example(input_text=ex.input_text, expected_output=ex.expected_output, metadata=dict(ex.metadata) if ex.metadata else {})
+                Example(
+                    input_text=ex.input_text,
+                    expected_output=ex.expected_output,
+                    metadata=dict(ex.metadata) if ex.metadata else {},
+                )
                 for ex in eval_examples
             ]
 
@@ -276,7 +316,7 @@ class PromptScorer:
                 print(f"[diag]   ... and {len(eval_examples) - 3} more examples")
 
         metrics = Metrics()
-        active_weights = self._weights_by_max_stage.get(stage, self._weights_by_max_stage[2])
+        active_metric_names = set()
 
         cheap_to_eval = []
         llm_to_eval = []
@@ -287,10 +327,15 @@ class PromptScorer:
                 if is_enabled():
                     print(f"[diag]   metric '{name}' skipped (stage {cfg['stage'] if cfg else '?'} > {stage})")
                 continue
+            if not instance.supports_examples(eval_examples):
+                if is_enabled():
+                    print(f"[diag]   metric '{name}' skipped (unsupported for current examples)")
+                continue
             if isinstance(instance, LLMMetric):
                 llm_to_eval.append(name)
             else:
                 cheap_to_eval.append((name, instance, cfg))
+            active_metric_names.add(name)
 
         # 1. Дешёвые метрики
         for name, instance, cfg in cheap_to_eval:
@@ -330,6 +375,12 @@ class PromptScorer:
                     print(f"[diag]     {name}: {combined_scores.get(name, 0.0):.4f} (weight={w})")
 
         # Нормализация весов, чтобы composite ∈ [0, 1] на любом stage
+        active_weights = {
+            m["name"]: m["weight"]
+            for m in self._metrics_config
+            if m["stage"] <= stage and m["name"] in active_metric_names
+        }
+
         total_w = sum(active_weights.values())
         if total_w > 0 and abs(total_w - 1.0) > 1e-6:
             metrics.weights = {k: v / total_w for k, v in active_weights.items()}
@@ -345,7 +396,10 @@ class PromptScorer:
                 _calls_start, _calls_end, _elapsed,
             )
 
-        self._eval_cache[cache_key] = metrics
+        self._eval_cache[cache_key] = (
+            metrics,
+            deepcopy(eval_examples) if execute else None,
+        )
 
         return metrics
 
@@ -382,7 +436,7 @@ class PromptScorer:
         # Разделяем успешные и неуспешные примеры
         successes, failures = [], []
         for ex in eval_examples:
-            if ex.actual_output and (ex.is_correct() or ex.is_correct_by_llm(self.llm)):
+            if ex.is_success_for_optimization():
                 successes.append(ex)
             else:
                 failures.append(ex)
