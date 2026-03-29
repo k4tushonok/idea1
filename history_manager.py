@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 import numpy as np
 from data_structures import PromptNode, OptimizationSource
-from config import DEFAULT_PARETO_METRICS, DEFAULT_STAGNATION_WINDOW, MIN_IMPROVEMENT, GLOBAL_HISTORY_WINDOW, TOP_BEST_NODES
+from config import MIN_IMPROVEMENT, GLOBAL_HISTORY_WINDOW, TOP_BEST_NODES, DEFAULT_STAGNATION_WINDOW
 
 class HistoryManager:
     def __init__(self):
@@ -123,49 +123,6 @@ class HistoryManager:
         
         return candidates[:top_k]
     
-    def get_pareto_front(self) -> List[PromptNode]:
-        """Определение Pareto-front"""
-        nodes = self.get_evaluated_nodes()
-        
-        nodes = [n for n in nodes if n.selection_accuracy() >= 0.1]
-    
-        if len(nodes) <= 1:
-            return nodes
-        
-        # Извлекаем значения метрик для каждого узла
-        values = []
-        for node in nodes:
-            node_values = []
-            for metric in DEFAULT_PARETO_METRICS:
-                node_values.append(node.metrics.metrics.get(metric, 0.0))
-            values.append(node_values)
-        
-        values = np.array(values)
-        
-        # Находим фронт
-        # Узел на фронте, если нет другого узла, который его доминирует
-        is_pareto = np.ones(len(nodes), dtype=bool)
-        
-        for i in range(len(nodes)):
-            if not is_pareto[i]:
-                continue
-            # Проверяем, доминирует ли кто-то узел i
-            for j in range(len(nodes)):
-                if i == j:
-                    continue
-                # j доминирует i, если j >= i по всем метрикам и строго > хотя бы по одной
-                if np.all(values[j] >= values[i]) and np.any(values[j] > values[i]):
-                    is_pareto[i] = False
-                    break
-        
-        front = [nodes[i] for i in range(len(nodes)) if is_pareto[i]]
-        
-        # Помечаем узлы на фронте
-        for node in front:
-            node.is_front = True
-        
-        return front
-    
     def analyze_successful_operations(self) -> Dict[str, int]:
         """Анализ изменений, которые привели к улучшению"""
         operation_counts = defaultdict(int)
@@ -221,12 +178,11 @@ class HistoryManager:
             "improvement": improvement,
             "recent_scores": recent_best_scores
         }
-    
+        
     def get_optimization_summary(self) -> Dict[str, any]:
         """Сводка оптимизации для глобального оптимизатора"""
         # Получаем лучшие узлы
         best_nodes = self.get_best_nodes(top_k=TOP_BEST_NODES)
-        front = self.get_pareto_front()
         
         # Анализ успешных операций
         successful_ops = self.analyze_successful_operations()
@@ -241,9 +197,6 @@ class HistoryManager:
             source.value: len(self.get_nodes_by_source(source))
             for source in OptimizationSource
         }
-        
-        # Проверка застоя
-        stagnation = self.get_stagnation_info()
         
         # Распределение по поколениям
         generation_stats = {
@@ -263,12 +216,10 @@ class HistoryManager:
                     "prompt_preview": node.prompt_text[:100] + "..."
                 } for node in best_nodes
             ],
-            "pareto_front_size": len(front),
             "successful_operations": successful_ops,
             "recent_nodes_count": len(recent_nodes),
             "source_distribution": source_stats,
-            "generation_distribution": generation_stats,
-            "stagnation_info": stagnation
+            "generation_distribution": generation_stats
         }
     
     def save(self, filepath: str):

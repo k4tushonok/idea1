@@ -3,14 +3,26 @@ from typing import List, Dict, Optional, Any, ClassVar
 from datetime import datetime
 from enum import Enum
 import uuid
+import re as _re
+import string as _string
 
 from config import (
     METRIC_WEIGHTS,
-    LINEAGE_RECENT_OPS_LIMIT,
-    USE_LLM_CORRECTNESS_CHECK,
-    CORRECTNESS_TOKEN_F1_THRESHOLD,
-    USE_CONTAINMENT_CHECK,
+    CORRECTNESS_TOKEN_F1_THRESHOLD
 )
+
+def _normalize_answer(s: str) -> str:
+    def remove_articles(text):
+        regex = _re.compile(r'\b(a|an|the)\b', _re.UNICODE)
+        return _re.sub(regex, ' ', text)
+    def white_space_fix(text):
+        return ' '.join(text.split())
+    def remove_punc(text):
+        exclude = set(_string.punctuation)
+        return ''.join(ch for ch in text if ch not in exclude)
+    def lower(text):
+        return text.lower()
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
 
 class OptimizationSource(Enum):
     """Источник оптимизации промпта"""
@@ -31,7 +43,19 @@ class Example:
         """Проверка корректности ответа"""
         if self.actual_output is None:
             return False
-        return self.expected_output.strip().lower() == self.actual_output.strip().lower()
+        all_ans = self.metadata.get("all_answers") if self.metadata else None
+        if all_ans is not None:
+            gold_list = [a for a in all_ans if _normalize_answer(a)]
+            if not gold_list:
+                gold_list = ['']
+        elif self.expected_output is not None and self.expected_output.strip().lower() == 'no answer':
+            gold_list = ['']
+        else:
+            gold_list = [self.expected_output] if self.expected_output else ['']
+        return any(
+            _normalize_answer(gold) == _normalize_answer(self.actual_output)
+            for gold in gold_list
+        )
 
     _correctness_cache: ClassVar[Dict[tuple, bool]] = {}
 
@@ -40,63 +64,34 @@ class Example:
         if self.actual_output is None:
             return False
 
-        try:
-            if self.expected_output is not None and self.expected_output.strip() and \
-               self.expected_output.strip().lower() == self.actual_output.strip().lower():
-                return True
-        except Exception:
-            pass
+        if self.is_correct():
+            return True
 
-        if not USE_LLM_CORRECTNESS_CHECK:
-            return self._is_similar_locally(self.actual_output, self.expected_output, self.metadata)
-
-        cache_key = (self.actual_output.strip().lower(), self.expected_output.strip().lower())
-        if cache_key in Example._correctness_cache:
-            return Example._correctness_cache[cache_key]
-
-        prompt = (f"There are two answers on the same question. "
-                  f"'Expected output' is a true answer used as label during dataset training. "
-                  f"'Actual answer' is an answer of LLM model. "
-                  f"You need to estimate semantic similarity of these answers. "
-                  f"Return 'Yes' if these answers are semantically the same (for example: '1984' and 'It was in 1984'), "
-                  f"and return 'No' otherwise.\n"
-                  f"# Output format: return 'Yes' or 'No'\n"
-                  f"# Answers to compare:\n"
-                  f"- Actual answer: {self.actual_output}\n"
-                  f"- Expected output: {self.expected_output}\n")
-        try:
-            response = llm.invoke(prompt)
-            result = response.strip().lower() == 'yes'
-            Example._correctness_cache[cache_key] = result
-            return result
-        except Exception:
-            print("LLM correctness evaluation failed")
-            return False
+        return self._is_similar_locally(self.actual_output, self.expected_output, self.metadata)
 
     @staticmethod
     def _is_similar_locally(actual: str, expected: str, metadata: Dict[str, Any] = None) -> bool:
         """Token-F1 + containment check + concept coverage for generation tasks"""
-        import re as _re
         if actual is None or expected is None:
             return False
-        actual_clean = actual.strip().lower()
-        expected_clean = expected.strip().lower()
-        if not actual_clean or not expected_clean:
-            return False
+        actual_norm = _normalize_answer(actual)
+        expected_norm = _normalize_answer(expected)
+        if not actual_norm or not expected_norm:
+            return actual_norm == expected_norm  # both empty → True
         # 0. Concept coverage for generation tasks
         if metadata and isinstance(metadata, dict) and "concepts" in metadata:
             concepts = metadata["concepts"]
             if concepts:
-                covered = sum(1 for c in concepts if _re.search(r'\b' + _re.escape(c.lower()), actual_clean))
+                covered = sum(1 for c in concepts if _re.search(r'\b' + _re.escape(c.lower()), actual_norm))
                 if covered >= len(concepts):
                     return True
         # 1. Containment: if expected is a substring of actual, it's correct
-        if USE_CONTAINMENT_CHECK and expected_clean in actual_clean:
+        if expected_norm in actual_norm:
             return True
         # 2. Token F1 check
         from collections import Counter as _Counter
-        a_tokens = actual_clean.split()
-        e_tokens = expected_clean.split()
+        a_tokens = actual_norm.split()
+        e_tokens = expected_norm.split()
         if not a_tokens or not e_tokens:
             return False
         common = sum((_Counter(a_tokens) & _Counter(e_tokens)).values())
@@ -213,7 +208,6 @@ class PromptNode:
     timestamp: datetime = field(default_factory=datetime.now)                       # Временная метка
     metadata: Dict[str, Any] = field(default_factory=dict)                          # Дополнительные метаданные
     is_evaluated: bool = False                                                      # Оценен ли промпт
-    is_front: bool = False                                                          # На фронте Парето (по нескольким метрикам)
     evaluation_examples: Dict[str, List[Example]] = field(default_factory=lambda: { # Примеры, на которых оценивался промпт
         "success": [],
         "failures": []
@@ -236,11 +230,6 @@ class PromptNode:
             return float(self.metadata["full_validation_accuracy"])
         except Exception:
             return float(self.metrics.metrics.get("accuracy", 0.0))
-    
-    def get_lineage_summary(self) -> str:
-        """Краткая сводка о происхождении промпта. Полезно для передачи LLM в контексте оптимизации"""
-        ops_summary = ", ".join([op.description for op in self.operations[-LINEAGE_RECENT_OPS_LIMIT:]])
-        return f"Gen {self.generation}, Source: {self.source.value}, Recent ops: [{ops_summary}], Score: {self.selection_score():.3f}"
     
     def to_dict(self) -> Dict:
         """Сериализация для сохранения"""
@@ -266,8 +255,7 @@ class PromptNode:
             },
             "timestamp": self.timestamp.isoformat(),
             "metadata": self.metadata,
-            "is_evaluated": self.is_evaluated,
-            "is_front": self.is_front
+            "is_evaluated": self.is_evaluated
         }
     
     @classmethod

@@ -11,7 +11,6 @@ SECTION_MARKERS = [
     "## SPECIFIC SUGGESTIONS",
     "## PRIORITY"
 ]
-
 CODE_BLOCK_RE = re.compile(r"```(?:\w+)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 PROMPT_BLOCK_RE = re.compile(r"PROMPT:\s*```(.*?)```", re.DOTALL | re.IGNORECASE)
 PROMPT_FALLBACK_RE = re.compile(r"PROMPT:\s*(.+)", re.DOTALL | re.IGNORECASE)
@@ -27,6 +26,27 @@ LEADING_META_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+class TaggedTextParser:
+    """Парсер текста с <START>/<END> тегами.
+    
+    Извлекает текстовые блоки, обёрнутые в start_tag/end_tag из ответа LLM.
+    Используется как для извлечения gradient feedbacks, так и для новых промптов.
+    """
+    @staticmethod
+    def parse_tagged_text(text: str, start_tag: str = "<START>", end_tag: str = "<END>") -> list:
+        texts = []
+        while True:
+            start_index = text.find(start_tag)
+            if start_index == -1:
+                break
+            end_index = text.find(end_tag, start_index)
+            if end_index == -1:
+                break
+            start_index += len(start_tag)
+            texts.append(text[start_index:end_index].strip())
+            text = text[end_index + len(end_tag):]
+        return texts
+    
 class MarkdownParser:
     """Парсер Markdown-блоков из ответов LLM"""
     @staticmethod

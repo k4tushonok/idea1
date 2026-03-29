@@ -1,52 +1,14 @@
-You are an expert prompt engineer. Your task is to improve a prompt based on analysis of its failures.
+I'm trying to write a zero-shot prompt for the following task: {task_description}.
 
-TASK BEING OPTIMIZED: {task_description}
+My current prompt is:
+"{current_prompt}"
 
-## CURRENT PROMPT:
-```
-{current_prompt}
-```
+But it gets the following examples wrong:
+{error_str}
 
-## FAILURE EXAMPLES (what the current prompt produces incorrectly):
-{failures_block}
+Based on these examples the problem with this prompt is that {feedback_str}
 
-## ANALYSIS OF PROBLEMS:
-{error_analysis}
+Based on the above information, I wrote {num_variants} different improved prompts.
+Each prompt is wrapped with <START> and <END>.
 
-## SUGGESTED DIRECTION FOR IMPROVEMENT:
-{suggested_direction}
-
-## SPECIFIC SUGGESTIONS:
-{specific_suggestions_block}
-
-## IMPROVEMENT GUIDELINES:
-1. Each variant must make a MEANINGFUL change that directly addresses the identified failures.
-   Valid changes include (but are not limited to):
-   - Adding explicit output format constraints (e.g., "Output only the exact answer span")
-   - Adding decision rules for edge cases (e.g., "If no answer exists in the context, output exactly 'No answer'")
-   - Adding step-by-step reasoning cues
-   - Adding quality/coverage constraints
-   - Changing task framing or instruction structure
-   - Making wording more precise to reduce ambiguity (this IS valid if it changes model behavior)
-2. Do NOT copy specific values, names, or numbers from the failure examples into the prompt.
-3. The output must be a prompt FOR the language model — a complete instruction, not a meta-description.
-4. Keep prompts concise and focused (1-5 sentences). Shorter is better if equally effective.
-5. Preserve essential format requirements from the current prompt.
-6. CRITICAL: The prompt must address the FULL task: "{task_description}".
-   If the task requires handling multiple scenarios (e.g., answerable AND unanswerable questions),
-   the prompt must instruct on ALL scenarios — even if the current failures are in only one.
-7. Inside each PROMPT code block, start directly with the prompt text.
-
-## YOUR TASK:
-Generate {num_variants} improved versions. Each should take a different approach to fixing the failures.
-
-## OUTPUT FORMAT:
-For each variant, use this exact format:
-VARIANT [number]:
-CHANGES MADE: [What you changed and why it addresses the failures]
-PROMPT:
-```
-[The complete improved prompt here]
-```
-
-Now generate {num_variants} variants:
+The {num_variants} new prompts are:

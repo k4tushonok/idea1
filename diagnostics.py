@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from collections import Counter
 from statistics import mean as _mean
 from typing import List, Optional, TYPE_CHECKING
 
@@ -48,13 +47,6 @@ def print_prompt(label: str, prompt: str) -> None:
     print(f"[diag] {label} text: {prompt}")
 
 
-def metrics_line(metrics: Metrics) -> str:
-    """Форматирует метрики в одну строку"""
-    ordered = sorted(metrics.metrics.items(), key=lambda kv: kv[0])
-    body = ", ".join(f"{name}={value:.3f}" for name, value in ordered)
-    return f"{body}, composite={metrics.composite_score():.3f}"
-
-
 def print_timing(label: str, seconds: float) -> None:
     """Стандартизированная запись времени выполнения."""
     print(f"[diag] timing [{label}]: {seconds:.2f}s")
@@ -71,12 +63,6 @@ def print_population(label: str, nodes: List) -> None:
         )
     else:
         print(f"[diag] {label}: n=0")
-
-
-def sources_summary(nodes: List) -> str:
-    """Строка с количеством узлов по источникам."""
-    cnt = Counter(n.source.value for n in nodes)
-    return ", ".join(f"{src}={c}" for src, c in sorted(cnt.items()))
 
 
 def scores_summary(values: List[float], precision: int = 3) -> str:
@@ -98,22 +84,6 @@ def print_candidates_summary(label: str, nodes: List) -> None:
         f"[diag] {label}: n={len(nodes)} "
         f"best={scores[0]:.3f} worst={scores[-1]:.3f} "
         f"scores={scores_summary(scores)}"
-    )
-
-
-def print_gate_comparison(
-    label: str,
-    candidate_score: float,
-    gate_score: float,
-    stage: int,
-    passed: bool,
-) -> None:
-    """Диагностика прохождения порога качества"""
-    status = "PASS" if passed else "FAIL"
-    delta = candidate_score - gate_score
-    print(
-        f"[diag] gate [{label}]: candidate={candidate_score:.4f} "
-        f"gate={gate_score:.4f} delta={delta:+.4f} stage={stage} → {status}"
     )
 
 

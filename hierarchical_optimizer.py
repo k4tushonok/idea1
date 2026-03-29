@@ -12,9 +12,9 @@ from global_optimizer import GlobalOptimizer
 from llm.llm_client import create_llm
 from diagnostics import (
     is_enabled, prompt_id,
-    print_population, print_timing, sources_summary, scores_summary, print_candidates_summary
+    print_timing, scores_summary, print_candidates_summary
 )
-from config import MAX_GENERATIONS, POPULATION_SIZE, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
+from config import MAX_GENERATIONS, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 class HierarchicalOptimizer:
     def __init__(self, metrics_config=None, task_description: str = ""):
@@ -32,8 +32,6 @@ class HierarchicalOptimizer:
         self.end_time = None
         self.best_node = None
         self.optimization_log = []
-        # Межпоколенческая рефлексия
-        self._reflection_context = ""
     
     def optimize(self, initial_prompt: str, train_examples: List[Example], validation_examples: List[Example], test_examples: Optional[List[Example]] = None, save_dir: Optional[str] = None) -> PromptNode:
         self.start_time = time.time()
@@ -68,8 +66,6 @@ class HierarchicalOptimizer:
         # Добавляем в историю
         self.history.add_node(initial_node)
         
-        # Инициализация популяции
-        population = [initial_node]
         self.best_node = initial_node
         best_score = initial_score
         
@@ -91,54 +87,35 @@ class HierarchicalOptimizer:
             # ЛОКАЛЬНАЯ ОПТИМИЗАЦИЯ
             
             print(f"Phase 1: Local Optimization")
-            print(f"  Population size: {len(population)}")
             if is_enabled():
-                print_population("population before local opt", population)
-                print(f"[diag] population sources: {sources_summary(population)}")
+                print(
+                    f"[diag] best_node: node_id={self.best_node.id} "
+                    f"prompt_id={prompt_id(self.best_node.prompt_text)} "
+                    f"score={self.best_node.selection_score():.3f}"
+                )
             
             new_candidates = []
             
-            # Оптимизируем top-2 узла популяции (или всех, если <= 2)
-            sorted_pop = sorted(population, key=lambda n: n.selection_score(), reverse=True)
-            nodes_to_optimize = set(n.id for n in sorted_pop[:2])
-            
-            for i, node in enumerate(sorted_pop, 1):
-                if node.id not in nodes_to_optimize:
-                    # Сохраняем неоптимизированные узлы для разнообразия
-                    new_candidates.append(node)
-                    continue
-                    
-                rank_label = "best" if i == 1 else f"#{i}"
-                print(f"\n  Optimizing {rank_label} node (score: {node.selection_score():.3f})")
-                if is_enabled():
-                    print(
-                        f"[diag] population node: node_id={node.id} "
-                        f"prompt_id={prompt_id(node.prompt_text)} gen={node.generation}"
-                    )
+            print(f"\n  Optimizing best node (score: {self.best_node.selection_score():.3f})")
+            try:
+                self.local_optimizer._evaluated_prompts.clear()
+                self.local_optimizer._train_outcomes_cache.clear()
+                self.editor._cache.clear()
+                self.gradient_gen._cache.clear()
                 
-                try:
-                    self.local_optimizer._evaluated_prompts.clear()
-                    self.local_optimizer._train_outcomes_cache.clear()
-                    self.editor._cache.clear()
-                    self.gradient_gen._cache.clear()
-                    
-                    # Передаём контекст рефлексии в генератор градиентов
-                    if self._reflection_context:
-                        self.gradient_gen.reflection_context = self._reflection_context
-                    
-                    improved_node = self.local_optimizer.optimize(
-                        starting_node=node,
-                        train_examples=train_examples,
-                        validation_examples=validation_examples
-                    )
-                    
-                    delta = improved_node.selection_score() - node.selection_score()
-                    print(f"  Node {rank_label} score: {node.selection_score():.3f} → {improved_node.selection_score():.3f} (Δ {delta:+.3f})")
-                    new_candidates.append(improved_node)
-                    
-                except Exception as e:
-                    print(f"  Error in local optimization for {rank_label}: {e}")
-                    new_candidates.append(node)
+                improved_node = self.local_optimizer.optimize(
+                    starting_node=self.best_node,
+                    train_examples=train_examples,
+                    validation_examples=validation_examples
+                )
+                
+                delta = improved_node.selection_score() - self.best_node.selection_score()
+                print(f"  Local result: {self.best_node.selection_score():.3f} → {improved_node.selection_score():.3f} (Δ {delta:+.3f})")
+                new_candidates.append(improved_node)
+                
+            except Exception as e:
+                print(f"  Error in local optimization: {e}")
+                new_candidates.append(self.best_node)
             
             # ГЛОБАЛЬНАЯ ОПТИМИЗАЦИЯ (если триггер сработал)
             
@@ -146,9 +123,6 @@ class HierarchicalOptimizer:
                 print(f"\nPhase 2: Global Optimization (Triggered)")
                 
                 try:
-                    # Передаём контекст рефлексии в глобальный оптимизатор
-                    self.global_optimizer.reflection_context = self._reflection_context
-                    
                     global_candidates = self.global_optimizer.optimize(
                         current_generation=generation,
                         train_examples=train_examples,
@@ -156,30 +130,8 @@ class HierarchicalOptimizer:
                     )
                     
                     if global_candidates:
-                        # Сортируем и берём только топ
-                        global_candidates_sorted = sorted(global_candidates, key=lambda n: n.selection_score(), reverse=True)
-                        top_global = global_candidates_sorted[:2]
-                        
-                        print(f"\nRefining {len(top_global)} global candidates with local optimization...")
-                        
-                        for i, global_candidate in enumerate(top_global, 1):
-                            print(f"\n  Refining global candidate {i}/{len(top_global)}")
-                            try:
-                                self.local_optimizer._evaluated_prompts.clear()
-                                self.local_optimizer._train_outcomes_cache.clear()
-                                self.editor._cache.clear()
-                                self.gradient_gen._cache.clear()
-                                
-                                refined = self.local_optimizer.optimize(
-                                    starting_node=global_candidate,
-                                    train_examples=train_examples,
-                                    validation_examples=validation_examples
-                                )
-                                new_candidates.append(refined)
-                                
-                            except Exception as e:
-                                print(f"    Error refining: {e}")
-                                new_candidates.append(global_candidate)
+                        new_candidates.extend(global_candidates)
+                        print(f"\n  Added {len(global_candidates)} global candidates")
                     else:
                         print("  Global optimization returned no candidates")
                     
@@ -191,18 +143,12 @@ class HierarchicalOptimizer:
             else:
                 print(f"\nPhase 2: Global Optimization (Skipped)")
             
-            # ОБНОВЛЕНИЕ ПОПУЛЯЦИИ
+            # ОБНОВЛЕНИЕ ЛУЧШЕГО
             
-            print(f"\nPhase 3: Population Update")
+            print(f"\nPhase 3: Best Node Update")
             
-            # Выбираем лучших для следующего поколения
-            population = self._select_population(
-                new_candidates,
-                population_size=POPULATION_SIZE
-            )
-            
-            # Обновляем лучший узел
-            generation_best = max(population, key=lambda n: n.selection_score())
+            # Find the best among all candidates this generation
+            generation_best = max(new_candidates, key=lambda n: n.selection_score())
             generation_best_score = generation_best.selection_score()
             
             llm_calls_gen_end = getattr(self.llm, 'total_api_calls', 0)
@@ -215,8 +161,6 @@ class HierarchicalOptimizer:
                     f"[diag] generation best node: node_id={generation_best.id} "
                     f"prompt_id={prompt_id(generation_best.prompt_text)}"
                 )
-                print_population(f"population after selection gen={generation}", population)
-                print(f"[diag] population sources after selection: {sources_summary(population)}")
                 print_candidates_summary(f"all new_candidates gen={generation}", new_candidates)
             
             # Проверяем улучшение
@@ -228,25 +172,9 @@ class HierarchicalOptimizer:
                 self.best_node = generation_best
                 best_score = generation_best_score
                 generations_without_improvement = 0
-                
-                # Генерируем рефлексию для следующего поколения
-                try:
-                    self._reflection_context = self._generate_reflection(
-                        prev_best, generation_best, train_examples
-                    )
-                except Exception as e:
-                    print(f"  Reflection generation failed: {e}")
             else:
                 print(f"  ✗ No significant improvement")
                 generations_without_improvement += 1
-                
-                if generations_without_improvement >= 1:
-                    try:
-                        self._reflection_context = self._generate_reflection(
-                            self.best_node, generation_best, train_examples
-                        )
-                    except Exception as e:
-                        print(f"  Stagnation reflection failed: {e}")
             
             # Логирование
             generation_time = time.time() - generation_start_time
@@ -255,7 +183,7 @@ class HierarchicalOptimizer:
                 "best_score": generation_best_score,
                 "overall_best": best_score,
                 "improvement": improvement,
-                "population_size": len(population),
+                "candidates_count": len(new_candidates),
                 "time": generation_time
             }
             self.optimization_log.append(log_entry)
@@ -311,112 +239,6 @@ class HierarchicalOptimizer:
         print("="*80 + "\n")
         
         return self.best_node
-    
-    def _generate_reflection(self, prev_best: PromptNode, curr_best: PromptNode, train_examples: List[Example]) -> str:
-        """Межпоколенческая рефлексия
-
-        LLM анализирует, что улучшилось и какое направление выбрать.
-        """
-        # Получение текущих провалов для контекста
-        failures_block = ""
-        if curr_best.evaluation_examples.get("failures"):
-            failures = curr_best.evaluation_examples["failures"][:5]
-            failure_lines = []
-            for i, ex in enumerate(failures, 1):
-                failure_lines.append(
-                    f"{i}. Input: {ex.input_text[:200]}\n"
-                    f"   Expected: {ex.expected_output[:100]}\n"
-                    f"   Got: {(ex.actual_output or 'None')[:100]}"
-                )
-            failures_block = "\n".join(failure_lines)
-        
-        task_ctx = f"TASK: {self.task_description}\n\n" if self.task_description else ""
-        reflection_prompt = (
-            "You are a prompt optimization strategist. Analyze the optimization progress "
-            "and provide DIRECTIVE instructions for the next step.\n\n"
-            f"{task_ctx}"
-            f"PREVIOUS BEST PROMPT (Score: {prev_best.selection_score():.3f}):\n"
-            f"```\n{prev_best.prompt_text}\n```\n\n"
-            f"CURRENT BEST PROMPT (Score: {curr_best.selection_score():.3f}):\n"
-            f"```\n{curr_best.prompt_text}\n```\n\n"
-        )
-
-        if curr_best.is_evaluated and hasattr(curr_best.metrics, 'metrics') and curr_best.metrics.metrics:
-            metric_lines = [f"  {k}: {v:.3f}" for k, v in sorted(curr_best.metrics.metrics.items())]
-            reflection_prompt += "CURRENT METRIC BREAKDOWN:\n" + "\n".join(metric_lines) + "\n\n"
-
-        if failures_block:
-            reflection_prompt += (
-                "KEY REMAINING FAILURES:\n"
-                f"{failures_block}\n\n"
-            )
-        reflection_prompt += (
-            "Provide a DIRECTIVE reflection (3-5 sentences):\n"
-            "1. What specific change caused the improvement (or lack thereof)?\n"
-            "2. Which specific metric is weakest and what is the root cause?\n"
-            "3. Give ONE concrete modification to try next (be specific: "
-            "e.g., 'add a constraint that forces extracting the exact span from context')\n"
-            "4. Does the current prompt cover the COMPLETE task, or is it only addressing a sub-problem?\n"
-            "Be concise and actionable. No vague advice."
-        )
-        
-        try:
-            reflection = self.llm.invoke(prompt=reflection_prompt)
-            print(f"  Reflection: {reflection[:200]}...")
-            return reflection
-        except Exception as e:
-            print(f"  Reflection failed: {e}")
-            return ""
-    
-    def _select_population(self, candidates: List[PromptNode], population_size: int) -> List[PromptNode]:
-        """Отбор популяции: дедупликация по тексту, затем diversity-aware selection.
-        Всегда берёт лучшего по score, затем выбирает оставшихся с учётом разнообразия"""
-        if len(candidates) <= population_size:
-            return candidates
-        
-        # Дедупликация по prompt_id
-        seen_pids = set()
-        unique = []
-        for c in sorted(candidates, key=lambda n: n.selection_score(), reverse=True):
-            pid = prompt_id(c.prompt_text)
-            if pid not in seen_pids:
-                seen_pids.add(pid)
-                unique.append(c)
-        
-        if len(unique) <= population_size:
-            return unique
-        
-        # Всегда берём лучший по score
-        selected = [unique[0]]
-        remaining = unique[1:]
-        
-        # Для остальных слотов: балансируем score и разнообразие
-        from config import DIVERSITY_WEIGHT
-        while len(selected) < population_size and remaining:
-            best_combined = None
-            best_combined_score = -1.0
-            for candidate in remaining:
-                score = candidate.selection_score()
-                # Среднее расстояние до уже отобранных
-                avg_dist = sum(
-                    self.scorer.calculate_edit_distance(candidate.prompt_text, s.prompt_text)
-                    for s in selected
-                ) / len(selected)
-                combined = score + DIVERSITY_WEIGHT * avg_dist
-                if combined > best_combined_score:
-                    best_combined_score = combined
-                    best_combined = candidate
-            if best_combined:
-                selected.append(best_combined)
-                remaining.remove(best_combined)
-            else:
-                break
-        
-        print(f"  Selected population ({len(selected)}):")
-        for i, s in enumerate(selected):
-            print(f"    #{i+1}: {s.selection_score():.3f} (gen {s.generation}, source {s.source.value})")
-        
-        return selected
     
     def get_optimization_report(self) -> Dict:
         if not self.best_node:

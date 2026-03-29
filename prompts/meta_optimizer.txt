@@ -1,42 +1,6 @@
-You are optimizing an instruction for a language model.
+Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.
 
-TASK: {task_description}
-
-Your goal is to produce an instruction that maximizes task performance across ALL aspects of the task.
-The task may have multiple sub-problems (e.g., extracting an answer AND detecting when no answer exists).
-The new instruction MUST handle all sub-problems correctly — not just the most common one.
-
-Below are previous instructions sorted by score from worst to best (0–100).
-Study what structural changes caused score improvements:
-
-<HISTORY>
 {history_block}
-</HISTORY>
 
-Current best score: {best_score:.1f}
-{reflection_block}
-These inputs are handled WRONG by the current best instruction — the new instruction MUST fix these:
-
-<WRONG_EXAMPLES>
 {exemplars_block}
-</WRONG_EXAMPLES>
-
-These inputs are handled CORRECTLY — the new instruction MUST still handle these well:
-
-<FEW_SHOT_EXAMPLES>
-{few_shot_block}
-</FEW_SHOT_EXAMPLES>
-
-Generate a NEW instruction that scores higher than {best_score:.1f}.
-
-KEY REQUIREMENTS:
-1. The instruction must address the COMPLETE task: "{task_description}".
-   Every scenario the task can present must be handled — including edge cases and secondary scenarios.
-2. Study the score progression: understand what structural patterns made higher-scoring instructions better.
-3. Fix the failure patterns in WRONG_EXAMPLES while preserving what works in FEW_SHOT_EXAMPLES.
-4. Be concise but precise (1–5 sentences). Every sentence must serve a purpose.
-5. Try a MEANINGFULLY DIFFERENT approach — not just a rephrasing of the best instruction.
-6. Consider: explicit output format constraints, disambiguation rules, step-by-step reasoning, coverage requirements.
-7. Do NOT copy specific answers, names, dates, or entities from the examples into the instruction.
-
-Wrap your instruction in <INS> and </INS> tags. Output nothing else.
+Generate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to the task: {task_description}.

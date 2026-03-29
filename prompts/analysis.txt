@@ -1,60 +1,10 @@
-You are an expert prompt engineer analyzing why a prompt fails on certain examples.
+I'm trying to write a zero-shot prompt for the following task: {task_description}.
 
-TASK BEING OPTIMIZED: {task_description}
+My current prompt is:
+"{current_prompt}"
 
-CURRENT PROMPT:
-```
-{current_prompt}
-```
+But this prompt gets the following examples wrong:
+{error_string}
 
-IMPORTANT: The prompt must address the COMPLETE task described above.
-If the task has multiple sub-problems (e.g., extract an answer AND detect when no answer exists),
-the prompt must handle ALL sub-problems — not just the one causing the current failures.
-
-FAILURE EXAMPLES (where the prompt produced incorrect outputs):
-
-{failure_examples_block}
-
-SUCCESS EXAMPLES (where the prompt produced correct outputs):
-
-{success_examples_section}
-
-OPTIMIZATION HISTORY CONTEXT:
-{context_block}
-
-Please provide your analysis in the following structured format:
-
-## ERROR ANALYSIS
-Describe what specifically is going wrong with the current prompt. Be concrete and specific.
-- What patterns do you see in the failures?
-- What is the prompt missing or doing incorrectly?
-- Does the prompt cover ALL sub-problems of the task, or is it focused on only one?
-- Are there any ambiguities or unclear instructions?
-
-## SUGGESTED DIRECTION
-Describe the semantic direction in which the prompt should be modified.
-- What concepts or constraints should be added?
-- What aspects need clarification or emphasis?
-- How should the prompt balance ALL parts of the task (not just the failing part)?
-
-## SPECIFIC SUGGESTIONS
-Provide 3-5 concrete, actionable suggestions for modifying the prompt.
-Each suggestion should clearly describe WHAT to change and WHY it helps.
-1. [First specific suggestion]
-2. [Second specific suggestion]
-3. [Third specific suggestion]
-...
-
-## PRIORITY
-Rate the urgency of these changes from 0.0 to 1.0, where:
-- 1.0 = Critical issues that must be fixed immediately
-- 0.7 = Important improvements that will significantly help
-- 0.5 = Moderate improvements
-- 0.3 = Minor refinements
-Priority: [your rating]
-
-CRITICAL RULES:
-- Focus on making the prompt handle the FULL task well, not just the failing subset.
-- Do NOT suggest copying specific answers, names, or entities from the examples into the prompt.
-- Suggestions must help the prompt generalize to ALL inputs, not just these specific cases.
-- Adding explicit output format constraints or decision boundaries IS a valid high-impact change.
+give {num_feedbacks} reasons why the prompt could have gotten these examples wrong.
+Wrap each reason with <START> and <END>

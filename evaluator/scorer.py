@@ -5,25 +5,18 @@ import json
 import hashlib
 from tqdm import tqdm
 
-from evaluator.metrics import (
-    MetricEvaluator, CheapMetric, LLMMetric, METRIC_REGISTRY,
-    AccuracyMetric, LLMJudgeMetric, CombinedLLMJudge,
-)
+from evaluator.metrics import (MetricEvaluator, LLMMetric, METRIC_REGISTRY, CombinedLLMJudge)
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
 from diagnostics import (
-    is_enabled, print_prompt, scores_summary,
-    llm_calls, format_stage_weights, print_eval_summary, print_gate_comparison,
+    is_enabled, print_prompt,
+    llm_calls, format_stage_weights, print_eval_summary,
 )
 from config import (
     METRICS_CONFIG,
     MAX_EXAMPLES_PER_NODE,
-    USE_LLM_EDIT_DISTANCE,
     BATCH_EVAL_SIZE,
-    STABILITY_LAMBDA,
-    BOOTSTRAP_RUNS,
-    BOOTSTRAP_SAMPLE_RATIO,
     JUDGE_BATCH_SIZE,
 )
 
@@ -356,63 +349,6 @@ class PromptScorer:
 
         return metrics
 
-    def evaluate_with_stability(
-        self,
-        prompt: str,
-        examples: List[Example],
-        stage: int = 2,
-        n_bootstrap: Optional[int] = None,
-    ) -> Dict:
-        """Bootstrap-оценка стабильности промпта (score = mean − λ·std). Отключено при BOOTSTRAP_RUNS=0"""
-        n_runs = n_bootstrap if n_bootstrap is not None else BOOTSTRAP_RUNS
-        if n_runs <= 0:
-            metrics = self.evaluate_prompt(prompt, examples, execute=True, sample=True, stage=stage)
-            return {
-                "score": metrics.composite_score(),
-                "mean": metrics.composite_score(),
-                "std": 0.0,
-                "metrics": metrics,
-            }
-
-        sample_size = max(5, int(len(examples) * BOOTSTRAP_SAMPLE_RATIO))
-        rng = random.Random(self.seed)
-        scores = []
-        last_metrics = None
-        _stab_calls_start = llm_calls(self.llm)
-
-        if is_enabled():
-            print(
-                f"[diag] stability: starting {n_runs} bootstrap runs, "
-                f"sample_size={sample_size}/{len(examples)} stage={stage}"
-            )
-
-        for i in range(n_runs):
-            subset = rng.sample(examples, min(sample_size, len(examples)))
-            m = self.evaluate_prompt(prompt, subset, execute=True, sample=False, stage=stage)
-            scores.append(m.composite_score())
-            last_metrics = m
-            if is_enabled():
-                print(f"[diag]   bootstrap run {i+1}/{n_runs}: composite={scores[-1]:.4f}")
-
-        mean_score = statistics.mean(scores)
-        std_score = statistics.stdev(scores) if len(scores) > 1 else 0.0
-        stable_score = mean_score - STABILITY_LAMBDA * std_score
-
-        if is_enabled():
-            _stab_calls_end = llm_calls(self.llm)
-            print(
-                f"[diag] stability: runs={n_runs} mean={mean_score:.4f} "
-                f"std={std_score:.4f} stable_score={stable_score:.4f} "
-                f"lambda={STABILITY_LAMBDA} llm_calls={_stab_calls_end - _stab_calls_start}"
-            )
-
-        return {
-            "score": stable_score,
-            "mean": mean_score,
-            "std": std_score,
-            "metrics": last_metrics,
-        }
-
     def evaluate_node(
         self,
         node: PromptNode,
@@ -471,28 +407,11 @@ class PromptScorer:
         return node
     
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
-        """
-        Семантическое расстояние между промптами, вычисляемое LLM.
-
-        0.0 — промпты эквивалентны по смыслу и структуре
-        1.0 — промпты принципиально разные
-        """
         h1 = self._hash_prompt(prompt1)
         h2 = self._hash_prompt(prompt2)
         pair_key = frozenset((h1, h2))
         if pair_key in self._edit_distance_cache:
             return self._edit_distance_cache[pair_key]
-
-        if USE_LLM_EDIT_DISTANCE:
-            template = Templates.load_template("evaluation")
-            prompt = template.format(prompt1=prompt1, prompt2=prompt2)
-            try:
-                result = self.llm.invoke(prompt=prompt)
-                dist = max(0.0, min(1.0, float(result)))
-                self._edit_distance_cache[pair_key] = dist
-                return dist
-            except Exception as e:
-                print(f"LLM distance evaluation failed, falling back: {e}")
 
         words1 = set(prompt1.lower().split())
         words2 = set(prompt2.lower().split())

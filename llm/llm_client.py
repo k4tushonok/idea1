@@ -8,12 +8,7 @@ from config import (
     API_KEY,
     MODEL,
     TEMPERATURE,
-    MAX_TOKENS,
-    LLM_CACHE_ENABLED,
-    CACHE_MAX_SIZE,
-    LLM_PERSISTENT_CACHE,
-    CACHE_DB_PATH,
-    CACHE_TTL_SECONDS,
+    MAX_TOKENS
 )
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import OrderedDict
@@ -28,15 +23,15 @@ class BaseLLM(ABC):
         self.total_invocations = 0
         self.total_api_calls = 0
 
-        self._cache_enabled = bool(LLM_CACHE_ENABLED)
-        self._cache_max = int(CACHE_MAX_SIZE) if CACHE_MAX_SIZE else 10000
+        self._cache_enabled = True
+        self._cache_max = 10000
         self._cache: "OrderedDict[Tuple[Any,...], str]" = OrderedDict()
         
-        self._persistent_enabled = bool(LLM_PERSISTENT_CACHE)
+        self._persistent_enabled = True
         self._persistent = None
         if self._persistent_enabled:
             try:
-                db_path = CACHE_DB_PATH
+                db_path = "optimization_results/llm_cache.sqlite"
                 os.makedirs(os.path.dirname(db_path), exist_ok=True)
                 self._persistent = SQLiteCache(db_path)
             except Exception:
@@ -46,15 +41,18 @@ class BaseLLM(ABC):
         self.total_invocations += 1
 
         effective_temp = temperature if temperature is not None else TEMPERATURE
+
+        use_cache = effective_temp == 0.0
+
         key = (prompt, getattr(self, "model", None), effective_temp, MAX_TOKENS)
 
-        if self._cache_enabled:
+        if self._cache_enabled and use_cache:
             if key in self._cache:
                 self._cache.move_to_end(key)
                 return self._cache[key]
 
         cache_key = None
-        if self._persistent_enabled and self._persistent:
+        if self._persistent_enabled and self._persistent and use_cache:
             try:
                 h = hashlib.sha256()
                 h.update(prompt.encode('utf-8'))
@@ -62,7 +60,7 @@ class BaseLLM(ABC):
                 h.update(str(effective_temp).encode('utf-8'))
                 h.update(str(MAX_TOKENS).encode('utf-8'))
                 cache_key = h.hexdigest()
-                cached = self._persistent.get(cache_key, ttl=int(CACHE_TTL_SECONDS))
+                cached = self._persistent.get(cache_key, ttl=int(7 * 24 * 3600))
                 if cached is not None:
                     if self._cache_enabled:
                         try:
@@ -77,13 +75,13 @@ class BaseLLM(ABC):
         result = self._generate(prompt, temperature=effective_temp)
         self.total_api_calls += 1
 
-        if self._persistent_enabled and self._persistent and cache_key is not None:
+        if self._persistent_enabled and self._persistent and cache_key is not None and use_cache:
             try:
                 self._persistent.set(cache_key, result)
             except Exception:
                 pass
 
-        if self._cache_enabled:
+        if self._cache_enabled and use_cache:
             try:
                 self._cache[key] = result
                 if len(self._cache) > self._cache_max:

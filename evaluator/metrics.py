@@ -3,9 +3,68 @@ from abc import ABC, abstractmethod
 from collections import Counter
 import json
 import re
+import string
+
+from nltk.translate.meteor_score import meteor_score as _nltk_meteor
 
 from data_structures import Example
 from llm.llm_client import BaseLLM
+
+
+def normalize_answer(s: str) -> str:
+    def remove_articles(text):
+        regex = re.compile(r'\b(a|an|the)\b', re.UNICODE)
+        return re.sub(regex, ' ', text)
+    def white_space_fix(text):
+        return ' '.join(text.split())
+    def remove_punc(text):
+        exclude = set(string.punctuation)
+        return ''.join(ch for ch in text if ch not in exclude)
+    def lower(text):
+        return text.lower()
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
+
+
+def get_tokens(s: str) -> List[str]:
+    if not s:
+        return []
+    return normalize_answer(s).split()
+
+
+def compute_exact(a_gold: str, a_pred: str) -> int:
+    return int(normalize_answer(a_gold) == normalize_answer(a_pred))
+
+
+def compute_f1(a_gold: str, a_pred: str) -> float:
+    gold_toks = get_tokens(a_gold)
+    pred_toks = get_tokens(a_pred)
+    common = Counter(gold_toks) & Counter(pred_toks)
+    num_same = sum(common.values())
+    if len(gold_toks) == 0 or len(pred_toks) == 0:
+        # If either is no-answer, then F1 is 1 if they agree, 0 otherwise
+        return int(gold_toks == pred_toks)
+    if num_same == 0:
+        return 0
+    precision = 1.0 * num_same / len(pred_toks)
+    recall = 1.0 * num_same / len(gold_toks)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return f1
+
+
+def _get_gold_answers(ex: Example) -> List[str]:
+    all_ans = ex.metadata.get("all_answers") if ex.metadata else None
+    if all_ans is not None:
+        # Filter out empty-after-normalization, keep unique
+        filtered = [a for a in all_ans if normalize_answer(a)]
+        if not filtered:
+            return ['']  # unanswerable
+        return filtered
+    # Fallback: single expected_output
+    if ex.expected_output is None:
+        return ['']
+    if ex.expected_output.strip().lower() == 'no answer':
+        return ['']
+    return [ex.expected_output]
 
 class MetricEvaluator(ABC):
     """Базовый класс метрики"""
@@ -32,7 +91,6 @@ class LLMMetric(MetricEvaluator):
 
 
 class ExactMatchMetric(CheapMetric):
-    """Строгое точное совпадение (без учета регистра, с обрезкой пробелов)."""
     name = "exact_match"
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
@@ -43,14 +101,13 @@ class ExactMatchMetric(CheapMetric):
             if ex.actual_output is None:
                 scores.append(0.0)
                 continue
-            scores.append(1.0 if ex.is_correct() else 0.0)
+            gold_answers = _get_gold_answers(ex)
+            em = max(compute_exact(gold, ex.actual_output) for gold in gold_answers)
+            scores.append(float(em))
         return sum(scores) / len(scores) if scores else 0.0
 
 
 class AccuracyMetric(CheapMetric):
-    """Точность через строгое совпадение + локальное сравнение (token-F1 + containment).
-    LLM-вызовы не требуются, если USE_LLM_CORRECTNESS_CHECK=False.
-    """
     name = "accuracy"
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
@@ -67,9 +124,6 @@ class AccuracyMetric(CheapMetric):
 
 
 class TokenF1Metric(CheapMetric):
-    """Токенный F1-score
-    Вычисляет precision/recall по токенам слов
-    """
     name = "token_f1"
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
@@ -80,26 +134,10 @@ class TokenF1Metric(CheapMetric):
             if ex.actual_output is None:
                 scores.append(0.0)
                 continue
-            scores.append(self._compute_token_f1(ex.actual_output, ex.expected_output))
+            gold_answers = _get_gold_answers(ex)
+            f1 = max(compute_f1(gold, ex.actual_output) for gold in gold_answers)
+            scores.append(f1)
         return sum(scores) / len(scores) if scores else 0.0
-
-    @staticmethod
-    def _compute_token_f1(prediction: str, reference: str) -> float:
-        pred_tokens = prediction.strip().lower().split()
-        ref_tokens = reference.strip().lower().split()
-
-        if not pred_tokens and not ref_tokens:
-            return 1.0
-        if not pred_tokens or not ref_tokens:
-            return 0.0
-
-        common = sum((Counter(pred_tokens) & Counter(ref_tokens)).values())
-        if common == 0:
-            return 0.0
-
-        precision = common / len(pred_tokens)
-        recall = common / len(ref_tokens)
-        return 2 * precision * recall / (precision + recall)
 
 
 class TokenOverlapMetric(CheapMetric):
@@ -147,14 +185,10 @@ class LLMJudgeMetric(LLMMetric):
             if ex.actual_output is None:
                 continue
 
-            try:
-                if (ex.expected_output is not None
-                        and ex.expected_output.strip()
-                        and ex.expected_output.strip().lower() == ex.actual_output.strip().lower()):
-                    scores.append(1.0)
-                    continue
-            except Exception:
-                pass
+            gold_answers = _get_gold_answers(ex)
+            if any(compute_exact(g, ex.actual_output) for g in gold_answers):
+                scores.append(1.0)
+                continue
 
             judge_prompt = self._build_judge_prompt(
                 prompt=prompt,
@@ -300,7 +334,7 @@ class ConceptCoverageMetric(CheapMetric):
             covered = 0
             for c in concepts:
                 c_lower = c.lower()
-                if re.search(r'\b' + re.escape(c_lower), actual_lower):
+                if re.search(r'\b' + re.escape(c_lower) + r'\w*\b', actual_lower):
                     covered += 1
             scores.append(covered / len(concepts))
         return sum(scores) / len(scores) if scores else 0.0
@@ -365,52 +399,8 @@ class RougeLMetric(CheapMetric):
         return prev[n]
 
 
-class FluencyMetric(LLMJudgeMetric):
-    name = "fluency"
-
-    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
-        return (
-            "You are a language quality evaluator.\n"
-            "Evaluate whether the following text is grammatically correct, "
-            "natural-sounding, and fluent in English.\n\n"
-            f"TEXT: {actual}\n\n"
-            "Return ONLY a single number: 1.0 if perfectly fluent, "
-            "0.0 if incomprehensible, or a value in between."
-        )
-
-
-class CompositionQualityMetric(LLMJudgeMetric):
-    name = "composition_quality"
-
-    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
-        return (
-            "You are an impartial judge evaluating compositional text generation.\n\n"
-            f"INPUT CONCEPTS: {input_text}\n\n"
-            f"REFERENCE: {expected}\n\n"
-            f"GENERATED: {actual}\n\n"
-            "Evaluate the GENERATED text:\n"
-            "1. Does it use ALL given concepts naturally?\n"
-            "2. Is it grammatically correct and fluent?\n"
-            "3. Is it coherent and meaningful?\n"
-            "4. Is it concise?\n\n"
-            "Return ONLY a single number between 0.0 and 1.0."
-        )
-
-
-class SPICEMetric(CheapMetric):
-    name = "spice"
-
-    _STOPWORDS = frozenset({
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-        "should", "may", "might", "can", "could", "must",
-        "and", "but", "or", "nor", "not", "so", "yet",
-        "in", "on", "at", "to", "for", "of", "with", "by", "from",
-        "as", "into", "through", "during", "before", "after",
-        "that", "which", "who", "whom", "this", "these", "those",
-        "it", "its", "he", "she", "his", "her", "they", "them", "their",
-        "i", "me", "my", "we", "us", "our", "you", "your",
-    })
+class MeteorMetric(CheapMetric):
+    name = "meteor"
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
         if not examples:
@@ -427,76 +417,37 @@ class SPICEMetric(CheapMetric):
             if not refs:
                 scores.append(0.0)
                 continue
-            best = max(self._spice_f1(ex.actual_output, ref) for ref in refs)
+            hyp_tok = ex.actual_output.strip().lower().split()
+            if not hyp_tok:
+                scores.append(0.0)
+                continue
+            best = max(
+                _nltk_meteor([r.lower().split()], hyp_tok)
+                for r in refs
+            )
             scores.append(best)
         return sum(scores) / len(scores) if scores else 0.0
-
-    @classmethod
-    def _extract_tuples(cls, text: str) -> set:
-        tokens = text.strip().lower().split()
-        content_tokens = [t for t in tokens if t not in cls._STOPWORDS]
-        if not content_tokens:
-            content_tokens = tokens
-        tuples_set = set()
-        tuples_set.update(content_tokens)
-        for i in range(len(content_tokens) - 1):
-            tuples_set.add((content_tokens[i], content_tokens[i + 1]))
-        for i in range(len(content_tokens) - 2):
-            tuples_set.add((content_tokens[i], content_tokens[i + 1], content_tokens[i + 2]))
-        return tuples_set
-
-    @classmethod
-    def _spice_f1(cls, prediction: str, reference: str) -> float:
-        pred_tuples = cls._extract_tuples(prediction)
-        ref_tuples = cls._extract_tuples(reference)
-        if not pred_tuples or not ref_tuples:
-            return 0.0
-        common = len(pred_tuples & ref_tuples)
-        if common == 0:
-            return 0.0
-        precision = common / len(pred_tuples)
-        recall = common / len(ref_tuples)
-        return 2 * precision * recall / (precision + recall)
-
-
-class DiversityMetric(LLMJudgeMetric):
-    name = "diversity"
-
-    def _build_judge_prompt(self, prompt, input_text, expected, actual) -> str:
-        return (
-            "You are a language diversity evaluator.\n\n"
-            f"INPUT CONCEPTS: {input_text}\n\n"
-            f"GENERATED TEXT: {actual}\n\n"
-            "Evaluate lexical and structural diversity of the generated text:\n"
-            "- Does it use varied vocabulary beyond the given concepts?\n"
-            "- Does it avoid repetitive or formulaic phrasing?\n"
-            "- Is the sentence structure interesting rather than trivially simple?\n\n"
-            "Return ONLY a single number between 0.0 and 1.0."
-        )
 
 
 class NoAnswerAccuracyMetric(CheapMetric):
     name = "no_answer_accuracy"
 
-    _NO_ANSWER_VARIANTS = {
-        "no answer", "noanswer", "n/a", "unanswerable",
-        "cannot be answered", "not enough information",
-        "no answer.", "no answer!",
-    }
-
     @classmethod
     def _is_no_answer(cls, text: str) -> bool:
         if text is None:
-            return False
-        cleaned = text.strip().lower().rstrip(".!")
-        return cleaned in cls._NO_ANSWER_VARIANTS
+            return True  # None treated as no-answer prediction
+        return normalize_answer(text) == '' or normalize_answer(text) in {
+            'no answer', 'noanswer', 'unanswerable',
+            'cannot be answered', 'not enough information',
+        }
 
     def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
         if not examples:
             return 0.0
         scores = []
         for ex in examples:
-            expected_na = self._is_no_answer(ex.expected_output)
+            gold_answers = _get_gold_answers(ex)
+            expected_na = gold_answers == ['']  # unanswerable
             actual_na = self._is_no_answer(ex.actual_output)
             if expected_na:
                 # Should produce 'No answer'
@@ -555,10 +506,7 @@ METRIC_REGISTRY: Dict[str, type] = {
     "efficiency": EfficiencyMetric,
     "concept_coverage": ConceptCoverageMetric,
     "rouge_l": RougeLMetric,
-    "fluency": FluencyMetric,
-    "composition_quality": CompositionQualityMetric,
-    "spice": SPICEMetric,
-    "diversity": DiversityMetric,
+    "meteor": MeteorMetric,
     "no_answer_accuracy": NoAnswerAccuracyMetric,
     "semantic_similarity": SemanticSimilarityMetric,
     "faithfulness": FaithfulnessMetric,
@@ -582,19 +530,6 @@ _CRITERIA_DESCRIPTIONS: Dict[str, str] = {
     "efficiency": (
         "How concise and efficient the response is. "
         "Penalize verbosity, redundancy, and unnecessary filler."
-    ),
-    "fluency": (
-        "Whether the text is grammatically correct, natural-sounding, and fluent. "
-        "1.0 = perfectly fluent, 0.0 = incomprehensible."
-    ),
-    "composition_quality": (
-        "How well the input concepts are woven into a coherent, meaningful sentence. "
-        "Consider concept usage, grammaticality, coherence, and conciseness."
-    ),
-    "diversity": (
-        "Lexical and structural diversity of the generated text. "
-        "Penalize repetitive or formulaic phrasing; reward varied vocabulary "
-        "and interesting sentence structure."
     ),
     "semantic_similarity": (
         "Semantic similarity between ACTUAL and EXPECTED output. "
@@ -638,10 +573,8 @@ class CombinedLLMJudge:
                 continue
 
             # Exact match → all criteria = 1.0
-            if (
-                ex.expected_output
-                and ex.expected_output.strip().lower() == ex.actual_output.strip().lower()
-            ):
+            gold_answers = _get_gold_answers(ex)
+            if any(compute_exact(g, ex.actual_output) for g in gold_answers):
                 for n in self.metric_names:
                     scores[n].append(1.0)
                 continue
