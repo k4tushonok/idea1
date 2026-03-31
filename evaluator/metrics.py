@@ -478,6 +478,74 @@ class NoAnswerAccuracyMetric(CheapMetric):
         return sum(scores) / len(scores) if scores else 0.0
 
 
+def _extract_final_number(text: str) -> str:
+    if text is None:
+        return ""
+    text = text.strip()
+    # 1. #### marker
+    m = re.search(r'####\s*(.+)', text)
+    if m:
+        return m.group(1).strip().replace(',', '')
+    # 2. "The answer is <number>" / "answer: <number>" patterns
+    m = re.search(
+        r'(?:the\s+)?(?:final\s+)?answer\s*(?:is|:|=)\s*\$?\s*(-?[\d,]+\.?\d*)',
+        text, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).replace(',', '')
+    # 3. "= <number>" at the end of a line
+    m = re.search(r'=\s*\$?\s*(-?[\d,]+\.?\d*)\s*$', text, re.MULTILINE)
+    if m:
+        return m.group(1).replace(',', '')
+    # 4. Last number in the text
+    numbers = re.findall(r'-?[\d,]+\.?\d*', text)
+    if numbers:
+        return numbers[-1].replace(',', '')
+    return normalize_answer(text)
+
+
+class NumericExactMatchMetric(CheapMetric):
+    name = "numeric_exact_match"
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            gold_answers = _get_gold_answers(ex)
+            pred = _extract_final_number(ex.actual_output)
+            em = max(
+                int(normalize_answer(_extract_final_number(g)) == normalize_answer(pred))
+                for g in gold_answers
+            )
+            scores.append(float(em))
+        return sum(scores) / len(scores) if scores else 0.0
+
+
+class NumericTokenF1Metric(CheapMetric):
+    name = "numeric_token_f1"
+
+    def evaluate(self, prompt: str, examples: List[Example], llm: BaseLLM = None) -> float:
+        if not examples:
+            return 0.0
+        scores = []
+        for ex in examples:
+            if ex.actual_output is None:
+                scores.append(0.0)
+                continue
+            gold_answers = _get_gold_answers(ex)
+            pred = _extract_final_number(ex.actual_output)
+            f1 = max(
+                compute_f1(_extract_final_number(g), pred)
+                for g in gold_answers
+            )
+            scores.append(f1)
+        return sum(scores) / len(scores) if scores else 0.0
+
+
 class SemanticSimilarityMetric(LLMJudgeMetric):
     name = "semantic_similarity"
 
@@ -530,6 +598,8 @@ METRIC_REGISTRY: Dict[str, type] = {
     "no_answer_accuracy": NoAnswerAccuracyMetric,
     "semantic_similarity": SemanticSimilarityMetric,
     "faithfulness": FaithfulnessMetric,
+    "numeric_exact_match": NumericExactMatchMetric,
+    "numeric_token_f1": NumericTokenF1Metric,
 }
 
 

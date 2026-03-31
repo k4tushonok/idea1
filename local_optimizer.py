@@ -95,6 +95,8 @@ class LocalOptimizer:
     def _example_search_score(ex: Example) -> float:
         if ex.actual_output is None:
             return 0.0
+        if ex.is_numeric_qa_task():
+            return 0.8 * ex.numeric_exact_match_score() + 0.2 * ex.numeric_token_f1_score()
         if ex.metadata and "all_answers" in ex.metadata:
             return 0.8 * ex.qa_exact_match_score() + 0.2 * ex.qa_token_f1_score()
         if ex.metadata and "references" in ex.metadata and "concepts" in ex.metadata:

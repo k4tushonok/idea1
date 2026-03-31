@@ -26,6 +26,30 @@ def _normalize_answer(s: str) -> str:
         return text.lower()
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
+
+def _extract_final_number(text: str) -> str:
+    """Извлечение финального числового ответа из рассуждения модели."""
+    if text is None:
+        return ""
+    text = text.strip()
+    m = _re.search(r'####\s*(.+)', text)
+    if m:
+        return m.group(1).strip().replace(',', '')
+    m = _re.search(
+        r'(?:the\s+)?(?:final\s+)?answer\s*(?:is|:|=)\s*\$?\s*(-?[\d,]+\.?\d*)',
+        text,
+        _re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).replace(',', '')
+    m = _re.search(r'=\s*\$?\s*(-?[\d,]+\.?\d*)\s*$', text, _re.MULTILINE)
+    if m:
+        return m.group(1).replace(',', '')
+    numbers = _re.findall(r'-?[\d,]+\.?\d*', text)
+    if numbers:
+        return numbers[-1].replace(',', '')
+    return _normalize_answer(text)
+
 class OptimizationSource(Enum):
     """Источник оптимизации промпта"""
     INITIAL = "initial"          # Начальный промпт
@@ -40,6 +64,13 @@ class Example:
     expected_output: str                                    # Ожидаемый результат
     actual_output: Optional[str] = None                     # Фактический результат 
     metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные
+
+    def is_numeric_qa_task(self) -> bool:
+        if not self.metadata:
+            return False
+        if self.metadata.get("task_type") == "numeric_qa":
+            return True
+        return bool(self.metadata.get("numeric_qa"))
     
     def _gold_answers(self) -> List[str]:
         all_ans = self.metadata.get("all_answers") if self.metadata else None
@@ -96,6 +127,24 @@ class Example:
             return 0.0
         return max(
             self._compute_token_f1(self.actual_output, gold)
+            for gold in self._gold_answers()
+        )
+
+    def numeric_exact_match_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        actual_num = _normalize_answer(_extract_final_number(self.actual_output))
+        return max(
+            float(_normalize_answer(_extract_final_number(gold)) == actual_num)
+            for gold in self._gold_answers()
+        )
+
+    def numeric_token_f1_score(self) -> float:
+        if self.actual_output is None:
+            return 0.0
+        actual_num = _extract_final_number(self.actual_output)
+        return max(
+            self._compute_token_f1(actual_num, _extract_final_number(gold))
             for gold in self._gold_answers()
         )
 
@@ -182,10 +231,17 @@ class Example:
             return False
         return self.qa_exact_match_score() >= 1.0
 
+    def is_numeric_qa_success(self) -> bool:
+        if self.actual_output is None:
+            return False
+        return self.numeric_exact_match_score() >= 1.0
+
     def is_success_for_optimization(self) -> bool:
         """Сигнал успеха для split на success/failure и mining ошибок"""
         if self.actual_output is None:
             return False
+        if self.is_numeric_qa_task():
+            return self.is_numeric_qa_success()
         if self.metadata and "all_answers" in self.metadata:
             return self.is_strict_qa_success()
         if self.metadata and "references" in self.metadata and "concepts" in self.metadata:

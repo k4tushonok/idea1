@@ -52,6 +52,7 @@ htmlcov/
 # Project-specific
 optimization_results/
 optimization_results_common_gen/
+optimization_results_gsm8k/
 *.log
 .cache/
 temp/
