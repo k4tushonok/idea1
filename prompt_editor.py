@@ -27,7 +27,9 @@ class PromptEditor:
         ``<START>/<END>`` теги.
         """
         editing_prompt = Templates.build_editing_prompt(
-            current_prompt, gradient, STEPS_PER_GRADIENT,
+            current_prompt,
+            gradient,
+            STEPS_PER_GRADIENT,
             task_description=self.task_description,
         )
 
@@ -68,9 +70,7 @@ class PromptEditor:
                     after_snippet=new_prompt_text[:200] + "...",
                 )
 
-                generation = (
-                    parent_node.generation + 1 if parent_node else 1
-                )
+                generation = parent_node.generation + 1 if parent_node else 1
                 node = PromptNode(
                     prompt_text=new_prompt_text,
                     parent_id=parent_node.id if parent_node else None,
@@ -87,7 +87,9 @@ class PromptEditor:
         except Exception as e:
             print(f"Error in apply_gradient: {e}")
             # Fallback: дописываем feedback как доп. инструкцию
-            new_prompt = f"{current_prompt}\n\nAdditional guidance:\n- {gradient.error_analysis}"
+            new_prompt = (
+                f"{current_prompt}\n\nAdditional guidance:\n- {gradient.error_analysis}"
+            )
             operation = EditOperation(
                 description="Fallback variant from gradient",
                 gradient_source=gradient,
@@ -137,15 +139,16 @@ class PromptEditor:
                 # Не дублируем оригинал
                 if new_text.strip().lower() == prompt_text.strip().lower():
                     continue
-                if any(n.prompt_text.strip().lower() == new_text.strip().lower() for n in nodes):
+                if any(
+                    n.prompt_text.strip().lower() == new_text.strip().lower()
+                    for n in nodes
+                ):
                     continue
 
                 operation = EditOperation(
                     description="MC synonym/paraphrase",
                 )
-                generation = (
-                    parent_node.generation + 1 if parent_node else 1
-                )
+                generation = parent_node.generation + 1 if parent_node else 1
                 node = PromptNode(
                     prompt_text=new_text,
                     parent_id=parent_node.id if parent_node else None,

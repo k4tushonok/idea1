@@ -7,6 +7,7 @@ TEMPLATES_DIR = Path(__file__).parent
 
 DEFAULT_TASK_DESCRIPTION = "a general language task"
 
+
 class Templates:
     @staticmethod
     def load_template(name: str) -> str:
@@ -15,9 +16,14 @@ class Templates:
         if not path.exists():
             raise FileNotFoundError(f"Template not found: {path}")
         return path.read_text(encoding="utf-8")
-    
+
     @staticmethod
-    def format_examples(examples: List[Example], max_count: int = None, include_expected: bool = True, truncate_input: int = 300) -> str:
+    def format_examples(
+        examples: List[Example],
+        max_count: int = None,
+        include_expected: bool = True,
+        truncate_input: int = 300,
+    ) -> str:
         """Форматирование списка примеров в текстовый блок"""
         block = ""
         for i, example in enumerate(examples[:max_count], 1):
@@ -47,9 +53,14 @@ class Templates:
         return error_string.strip()
 
     @staticmethod
-    def build_analysis_prompt(current_prompt: str, error_string: str, num_feedbacks: int = 5, task_description: str = "") -> str:
+    def build_analysis_prompt(
+        current_prompt: str,
+        error_string: str,
+        num_feedbacks: int = 5,
+        task_description: str = "",
+    ) -> str:
         """Построение промпта для получения текстовых градиентов.
-        
+
         Использует простой формат: причины ошибок обёрнуты в <START>/<END> теги.
         """
         template = Templates.load_template("analysis")
@@ -59,11 +70,16 @@ class Templates:
             num_feedbacks=num_feedbacks,
             task_description=task_description or DEFAULT_TASK_DESCRIPTION,
         )
-    
+
     @staticmethod
-    def build_editing_prompt(current_prompt: str, gradient: TextGradient, num_variants: int, task_description: str = "") -> str:
+    def build_editing_prompt(
+        current_prompt: str,
+        gradient: TextGradient,
+        num_variants: int,
+        task_description: str = "",
+    ) -> str:
         """Построение промпта для применения градиента.
-        
+
         Использует формат: новые промпты обёрнуты в <START>/<END> теги.
         """
         template = Templates.load_template("editing")
@@ -80,7 +96,7 @@ class Templates:
         """Построение промпта для генерации synonym/paraphrase."""
         template = Templates.load_template("synonym")
         return template.format(prompt_text=prompt_text)
-    
+
     @staticmethod
     def _bucketize_float(num: float, n_buckets: int = 100) -> int:
         num = max(0.0, min(1.0, num))
@@ -98,10 +114,10 @@ class Templates:
 
         history_lines = []
         for node in sorted_nodes:
-            score_int = Templates._bucketize_float(node.selection_score(), num_score_buckets)
-            history_lines.append(
-                f"text:\n{node.prompt_text}\nscore:\n{score_int}"
+            score_int = Templates._bucketize_float(
+                node.selection_score(), num_score_buckets
             )
+            history_lines.append(f"text:\n{node.prompt_text}\nscore:\n{score_int}")
         history_block = "\n\n".join(history_lines)
 
         if exemplars:
@@ -121,4 +137,3 @@ class Templates:
             exemplars_block=exemplars_block,
             task_description=task_description or DEFAULT_TASK_DESCRIPTION,
         )
-

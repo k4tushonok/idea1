@@ -3,13 +3,7 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
-from config import (
-    PROVIDER,
-    API_KEY,
-    MODEL,
-    TEMPERATURE,
-    MAX_TOKENS
-)
+from config import PROVIDER, API_KEY, MODEL, LOCAL_TEMPERATURE, MAX_TOKENS
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import OrderedDict
 from typing import Any, Tuple, Optional
@@ -17,6 +11,7 @@ import sqlite3
 import os
 import time
 import hashlib
+
 
 class BaseLLM(ABC):
     def __init__(self):
@@ -26,7 +21,7 @@ class BaseLLM(ABC):
         self._cache_enabled = True
         self._cache_max = 10000
         self._cache: "OrderedDict[Tuple[Any,...], str]" = OrderedDict()
-        
+
         self._persistent_enabled = True
         self._persistent = None
         if self._persistent_enabled:
@@ -40,7 +35,7 @@ class BaseLLM(ABC):
     def invoke(self, prompt: str, temperature: Optional[float] = None) -> str:
         self.total_invocations += 1
 
-        effective_temp = temperature if temperature is not None else TEMPERATURE
+        effective_temp = temperature if temperature is not None else LOCAL_TEMPERATURE
 
         use_cache = effective_temp == 0.0
 
@@ -55,10 +50,10 @@ class BaseLLM(ABC):
         if self._persistent_enabled and self._persistent and use_cache:
             try:
                 h = hashlib.sha256()
-                h.update(prompt.encode('utf-8'))
-                h.update(str(getattr(self, 'model', '')).encode('utf-8'))
-                h.update(str(effective_temp).encode('utf-8'))
-                h.update(str(MAX_TOKENS).encode('utf-8'))
+                h.update(prompt.encode("utf-8"))
+                h.update(str(getattr(self, "model", "")).encode("utf-8"))
+                h.update(str(effective_temp).encode("utf-8"))
+                h.update(str(MAX_TOKENS).encode("utf-8"))
                 cache_key = h.hexdigest()
                 cached = self._persistent.get(cache_key, ttl=int(7 * 24 * 3600))
                 if cached is not None:
@@ -75,7 +70,12 @@ class BaseLLM(ABC):
         result = self._generate(prompt, temperature=effective_temp)
         self.total_api_calls += 1
 
-        if self._persistent_enabled and self._persistent and cache_key is not None and use_cache:
+        if (
+            self._persistent_enabled
+            and self._persistent
+            and cache_key is not None
+            and use_cache
+        ):
             try:
                 self._persistent.set(cache_key, result)
             except Exception:
@@ -91,10 +91,11 @@ class BaseLLM(ABC):
                 pass
 
         return result
-        
+
     @abstractmethod
-    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
+    def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
         pass
+
 
 class SQLiteCache:
     def __init__(self, db_path: str):
@@ -139,60 +140,65 @@ class SQLiteCache:
         try:
             ts = int(time.time())
             cur = self._conn.cursor()
-            cur.execute("INSERT OR REPLACE INTO llm_cache (key, value, ts) VALUES (?, ?, ?)", (key, value, ts))
+            cur.execute(
+                "INSERT OR REPLACE INTO llm_cache (key, value, ts) VALUES (?, ?, ?)",
+                (key, value, ts),
+            )
             self._conn.commit()
         except Exception:
             print("Failed to set cache entry")
             pass
+
 
 class LocalQwenModel(BaseLLM):
     def __init__(self):
         super().__init__()
         self.model_name = MODEL
         self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype="auto",
-            device_map="cuda"
+            self.model_name, torch_dtype="auto", device_map="cuda"
         )
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
+    def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
         messages = [
-            {"role": "system", "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system",
+                "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
+            },
+            {"role": "user", "content": prompt},
         ]
         text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
         model_inputs = self.tokenizer([text], return_tensors="pt").to(self.model.device)
 
-        generated_ids = self.model.generate(
-            **model_inputs,
-            max_new_tokens=512
-        )
+        generated_ids = self.model.generate(**model_inputs, max_new_tokens=512)
         generated_ids = [
-            output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+            output_ids[len(input_ids) :]
+            for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
         ]
 
-        response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[
+            0
+        ]
         return response
-    
+
+
 class OpenAILLM(BaseLLM):
     def __init__(self):
         super().__init__()
         self.client = OpenAI(api_key=API_KEY)
         self.model = MODEL
 
-    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
+    def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_completion_tokens=MAX_TOKENS,
-            temperature=temperature
+            temperature=temperature,
         )
         return response.choices[0].message.content
+
 
 class GeminiLLM(BaseLLM):
     def __init__(self):
@@ -200,17 +206,16 @@ class GeminiLLM(BaseLLM):
         self.client = genai.Client(api_key=API_KEY)
         self.model = MODEL
 
-    def _generate(self, prompt: str, temperature: float = TEMPERATURE) -> str:
+    def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
         config = genai_types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=MAX_TOKENS,
         )
         response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=config
+            model=self.model, contents=prompt, config=config
         )
         return response.text
+
 
 def create_llm() -> BaseLLM:
     provider = PROVIDER

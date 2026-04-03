@@ -23,7 +23,7 @@ def prompt_id(prompt: str) -> str:
 
 def llm_calls(llm) -> int:
     """Общее число API-вызовов"""
-    return getattr(llm, 'total_api_calls', 0)
+    return getattr(llm, "total_api_calls", 0)
 
 
 def format_stage_weights(weights: dict) -> str:

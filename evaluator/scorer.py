@@ -6,21 +6,25 @@ import json
 import hashlib
 from tqdm import tqdm
 
-from evaluator.metrics import (MetricEvaluator, LLMMetric, METRIC_REGISTRY, CombinedLLMJudge)
+from evaluator.metrics import MetricEvaluator, METRIC_REGISTRY
 from prompts.templates import Templates
 from data_structures import Example, Metrics, PromptNode
 from llm.llm_client import BaseLLM
 from diagnostics import (
-    is_enabled, print_prompt,
-    llm_calls, format_stage_weights, print_eval_summary,
+    is_enabled,
+    print_prompt,
+    llm_calls,
+    format_stage_weights,
+    print_eval_summary,
 )
 from config import (
     METRICS_CONFIG,
     MAX_EXAMPLES_PER_NODE,
     BATCH_EVAL_SIZE,
-    JUDGE_BATCH_SIZE,
-    EVAL_TEMPERATURE,
 )
+
+_EVAL_TEMPERATURE: float = 0.1
+
 
 class PromptScorer:
     def __init__(self, llm: BaseLLM, metrics_config: Optional[List[Dict]] = None):
@@ -31,38 +35,39 @@ class PromptScorer:
         self._metrics_config: List[Dict] = metrics_config or METRICS_CONFIG
 
         self._metric_instances: Dict[str, MetricEvaluator] = {}
-        self._metrics_by_stage: Dict[int, List[Dict]] = {1: [], 2: [], 3: []}
 
         for cfg in self._metrics_config:
             name = cfg["name"]
-            stage = cfg["stage"]
             cls = METRIC_REGISTRY.get(name)
             if cls is None:
                 print(f"[scorer] WARNING: unknown metric '{name}' — skipped")
                 continue
             self._metric_instances[name] = cls()
-            self._metrics_by_stage[stage].append(cfg)
 
         self._weights_by_max_stage: Dict[int, Dict[str, float]] = {}
         for max_stage in (1, 2, 3):
             active = [m for m in self._metrics_config if m["stage"] <= max_stage]
-            self._weights_by_max_stage[max_stage] = {m["name"]: m["weight"] for m in active}
+            self._weights_by_max_stage[max_stage] = {
+                m["name"]: m["weight"] for m in active
+            }
 
         self._last_eval_examples: Optional[List[Example]] = None
 
-        self._eval_cache: Dict[Tuple[str, str, int], Tuple["Metrics", Optional[List[Example]]]] = {}
+        self._eval_cache: Dict[
+            Tuple[str, str, int], Tuple["Metrics", Optional[List[Example]]]
+        ] = {}
         self._edit_distance_cache: Dict[frozenset, float] = {}
 
     @staticmethod
     def _hash_prompt(prompt: str) -> str:
-        return hashlib.md5(prompt.encode('utf-8')).hexdigest()
+        return hashlib.md5(prompt.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _hash_examples(examples: List[Example]) -> str:
         """Быстрый хеш набора примеров по input_text для идентификации батча"""
         h = hashlib.md5()
         for ex in examples:
-            h.update(ex.input_text[:200].encode('utf-8'))
+            h.update(ex.input_text[:200].encode("utf-8"))
         return h.hexdigest()
 
     def clear_eval_cache(self):
@@ -70,14 +75,18 @@ class PromptScorer:
         self._eval_cache.clear()
         self._edit_distance_cache.clear()
 
-    def _sample_examples(self, examples: List[Example], seed_offset: int = 0) -> List[Example]:
+    def _sample_examples(
+        self, examples: List[Example], seed_offset: int = 0
+    ) -> List[Example]:
         """Семплирование подмножества примеров для оценки"""
         if len(examples) <= self.max_examples_per_node:
             return examples
         rnd = random.Random(self.seed + seed_offset)
         return rnd.sample(examples, self.max_examples_per_node)
 
-    def execute_prompt_batch(self, prompt: str, examples: List[Example], progress_bar: bool = False) -> List[Example]:
+    def execute_prompt_batch(
+        self, prompt: str, examples: List[Example], progress_bar: bool = False
+    ) -> List[Example]:
         """Выполнение промпта батчами на массиве примеров"""
         if len(examples) <= 1:
             if is_enabled():
@@ -86,13 +95,13 @@ class PromptScorer:
                 ex.actual_output = self.execute_prompt(
                     prompt,
                     ex.input_text,
-                    temperature=EVAL_TEMPERATURE,
+                    temperature=_EVAL_TEMPERATURE,
                 )
             return examples
 
         def chunks(lst, n):
             for i in range(0, len(lst), n):
-                yield lst[i:i + n]
+                yield lst[i : i + n]
 
         total = len(examples)
         batch_list = list(chunks(examples, BATCH_EVAL_SIZE))
@@ -113,7 +122,7 @@ class PromptScorer:
             try:
                 raw = self.llm.invoke(
                     prompt=batch_prompt,
-                    temperature=EVAL_TEMPERATURE,
+                    temperature=_EVAL_TEMPERATURE,
                 )
                 parsed = self._parse_batch_response(raw, len(batch))
             except Exception as e:
@@ -148,21 +157,25 @@ class PromptScorer:
                     batch[idx].actual_output = self.execute_prompt(
                         prompt,
                         batch[idx].input_text,
-                        temperature=EVAL_TEMPERATURE,
+                        temperature=_EVAL_TEMPERATURE,
                     )
                 done += len(batch)
                 continue
 
             if is_enabled():
-                print(f"[diag]   batch {b_idx}/{n_batches}: FALLBACK to single execution ({len(batch)} examples)")
+                print(
+                    f"[diag]   batch {b_idx}/{n_batches}: FALLBACK to single execution ({len(batch)} examples)"
+                )
 
             if progress_bar:
                 for i, ex in enumerate(tqdm(batch)):
-                    print(f"Falling back to single execution for example {i+1}/{len(batch)}")
+                    print(
+                        f"Falling back to single execution for example {i+1}/{len(batch)}"
+                    )
                     ex.actual_output = self.execute_prompt(
                         prompt,
                         ex.input_text,
-                        temperature=EVAL_TEMPERATURE,
+                        temperature=_EVAL_TEMPERATURE,
                     )
             else:
                 print(f"Falling back to single execution for {len(batch)} examples")
@@ -170,7 +183,7 @@ class PromptScorer:
                     ex.actual_output = self.execute_prompt(
                         prompt,
                         ex.input_text,
-                        temperature=EVAL_TEMPERATURE,
+                        temperature=_EVAL_TEMPERATURE,
                     )
             done += len(batch)
 
@@ -192,8 +205,8 @@ class PromptScorer:
             "For every item, generate the same reply you would produce if that item were sent alone in a separate call.\n"
             "Do not compare items, do not combine contexts, do not reuse information across items, and do not add explanations.\n"
             "Return ONLY a valid JSON array. Each item must be an object with exactly two keys:\n"
-            "- \"index\": the integer input index\n"
-            "- \"output\": the exact assistant reply string for that independent item\n\n"
+            '- "index": the integer input index\n'
+            '- "output": the exact assistant reply string for that independent item\n\n'
             "The array must contain exactly one object for every input index from 0 to N-1.\n"
         )
         body = [header, "\n"]
@@ -206,7 +219,9 @@ class PromptScorer:
         body.append("Return the JSON array now:")
         return "".join(body)
 
-    def _parse_batch_response(self, response_text: str, n_expected: int) -> Optional[List[str]]:
+    def _parse_batch_response(
+        self, response_text: str, n_expected: int
+    ) -> Optional[List[str]]:
         try:
             start = response_text.find("[")
             end = response_text.rfind("]") + 1
@@ -246,11 +261,15 @@ class PromptScorer:
                 print(f"[diag] batch parse exception: {e}")
             print("Failed to parse batch response")
             return None
-    
-    def execute_prompt(self, prompt: str, input_text: str, temperature: Optional[float] = None) -> str:
+
+    def execute_prompt(
+        self, prompt: str, input_text: str, temperature: Optional[float] = None
+    ) -> str:
         """Выполнение промпта на одном примере"""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
-        effective_temperature = EVAL_TEMPERATURE if temperature is None else temperature
+        effective_temperature = (
+            _EVAL_TEMPERATURE if temperature is None else temperature
+        )
         return self.llm.invoke(prompt=full_prompt, temperature=effective_temperature)
 
     def evaluate_prompt(
@@ -263,10 +282,16 @@ class PromptScorer:
         stage: int = 2,
     ) -> Metrics:
         _calls_start = llm_calls(self.llm)
-        import time as _t; _t0 = _t.time()
+        import time as _t
+
+        _t0 = _t.time()
 
         if is_enabled():
-            will_use = min(len(examples), self.max_examples_per_node) if sample else len(examples)
+            will_use = (
+                min(len(examples), self.max_examples_per_node)
+                if sample
+                else len(examples)
+            )
             print(
                 f"[diag] evaluate_prompt: execute={execute} sample={sample} "
                 f"stage={stage} incoming={len(examples)} will_use={will_use} "
@@ -286,7 +311,9 @@ class PromptScorer:
             cached_metrics, cached_examples = cached
             if is_enabled():
                 print(f"[diag] evaluate_prompt: cache HIT (stage={stage})")
-            self._last_eval_examples = deepcopy(cached_examples) if cached_examples is not None else None
+            self._last_eval_examples = (
+                deepcopy(cached_examples) if cached_examples is not None else None
+            )
             return cached_metrics
 
         if execute:
@@ -309,38 +336,39 @@ class PromptScorer:
                 f"llm_calls_for_execution={_calls_after_exec - _calls_start}"
             )
             for idx, ex in enumerate(eval_examples[:3]):
-                out_preview = (ex.actual_output or '<None>')[:80]
-                exp_preview = (ex.expected_output or '<None>')[:80]
-                print(f"[diag]   example[{idx}] expected='{exp_preview}' actual='{out_preview}'")
+                out_preview = (ex.actual_output or "<None>")[:80]
+                exp_preview = (ex.expected_output or "<None>")[:80]
+                print(
+                    f"[diag]   example[{idx}] expected='{exp_preview}' actual='{out_preview}'"
+                )
             if len(eval_examples) > 3:
                 print(f"[diag]   ... and {len(eval_examples) - 3} more examples")
 
         metrics = Metrics()
         active_metric_names = set()
 
-        cheap_to_eval = []
-        llm_to_eval = []
+        metrics_to_eval = []
 
         for name, instance in self._metric_instances.items():
             cfg = next((c for c in self._metrics_config if c["name"] == name), None)
             if cfg is None or cfg["stage"] > stage:
                 if is_enabled():
-                    print(f"[diag]   metric '{name}' skipped (stage {cfg['stage'] if cfg else '?'} > {stage})")
+                    print(
+                        f"[diag]   metric '{name}' skipped (stage {cfg['stage'] if cfg else '?'} > {stage})"
+                    )
                 continue
             if not instance.supports_examples(eval_examples):
                 if is_enabled():
-                    print(f"[diag]   metric '{name}' skipped (unsupported for current examples)")
+                    print(
+                        f"[diag]   metric '{name}' skipped (unsupported for current examples)"
+                    )
                 continue
-            if isinstance(instance, LLMMetric):
-                llm_to_eval.append(name)
-            else:
-                cheap_to_eval.append((name, instance, cfg))
+            metrics_to_eval.append((name, instance, cfg))
             active_metric_names.add(name)
 
-        # 1. Дешёвые метрики
-        for name, instance, cfg in cheap_to_eval:
+        for name, instance, cfg in metrics_to_eval:
             _m_t0 = _t.time()
-            score = instance.evaluate(prompt=prompt, examples=eval_examples, llm=self.llm)
+            score = instance.evaluate(prompt=prompt, examples=eval_examples)
             _m_elapsed = _t.time() - _m_t0
             metrics.metrics[name] = float(score)
             if is_enabled():
@@ -350,29 +378,6 @@ class PromptScorer:
                     f"(stage={cfg['stage']} weight={cfg['weight']} "
                     f"time={_m_elapsed:.2f}s llm_calls={_m_calls})"
                 )
-
-        # 2. LLM-метрики в одном батче
-        if llm_to_eval:
-            _m_t0 = _t.time()
-            combined_judge = CombinedLLMJudge(llm_to_eval, batch_size=JUDGE_BATCH_SIZE)
-            combined_scores = combined_judge.evaluate(
-                prompt=prompt, examples=eval_examples, llm=self.llm,
-            )
-            _m_elapsed = _t.time() - _m_t0
-            for name, score in combined_scores.items():
-                metrics.metrics[name] = float(score)
-            if is_enabled():
-                _m_calls = llm_calls(self.llm)
-                n_batches = (len(eval_examples) + JUDGE_BATCH_SIZE - 1) // JUDGE_BATCH_SIZE
-                print(
-                    f"[diag]   CombinedLLMJudge: metrics={llm_to_eval} "
-                    f"examples={len(eval_examples)} batches={n_batches} "
-                    f"time={_m_elapsed:.2f}s llm_calls={_m_calls}"
-                )
-                for name in llm_to_eval:
-                    cfg = next((c for c in self._metrics_config if c["name"] == name), None)
-                    w = cfg['weight'] if cfg else 0
-                    print(f"[diag]     {name}: {combined_scores.get(name, 0.0):.4f} (weight={w})")
 
         # Нормализация весов, чтобы composite ∈ [0, 1] на любом stage
         active_weights = {
@@ -392,8 +397,12 @@ class PromptScorer:
 
         if is_enabled():
             print_eval_summary(
-                f"evaluate_prompt", metrics, stage,
-                _calls_start, _calls_end, _elapsed,
+                f"evaluate_prompt",
+                metrics,
+                stage,
+                _calls_start,
+                _calls_end,
+                _elapsed,
             )
 
         self._eval_cache[cache_key] = (
@@ -413,7 +422,9 @@ class PromptScorer:
         stage: int = 1,
     ) -> PromptNode:
         """Полная оценка узла: выполнение + метрики + разделение на успехи/провалы"""
-        import time as _t; _node_t0 = _t.time()
+        import time as _t
+
+        _node_t0 = _t.time()
         _node_calls_start = llm_calls(self.llm)
 
         if is_enabled():
@@ -425,8 +436,11 @@ class PromptScorer:
             )
 
         metrics = self.evaluate_prompt(
-            node.prompt_text, test_examples,
-            execute=execute, seed_offset=seed_offset, stage=stage,
+            node.prompt_text,
+            test_examples,
+            execute=execute,
+            seed_offset=seed_offset,
+            stage=stage,
         )
         node.metrics = metrics
         node.is_evaluated = True
@@ -442,7 +456,10 @@ class PromptScorer:
                 failures.append(ex)
 
         node.evaluation_examples = {"success": successes, "failures": failures}
-        node.evaluation_examples_by_split[split] = {"success": successes, "failures": failures}
+        node.evaluation_examples_by_split[split] = {
+            "success": successes,
+            "failures": failures,
+        }
 
         _node_elapsed = _t.time() - _node_t0
         _node_calls_end = llm_calls(self.llm)
@@ -457,9 +474,11 @@ class PromptScorer:
             )
             for name, value in sorted(metrics.metrics.items()):
                 w = metrics.weights.get(name, 0.0)
-                print(f"[diag]   {name}={value:.4f}  weight={w}  contribution={value * w:.4f}")
+                print(
+                    f"[diag]   {name}={value:.4f}  weight={w}  contribution={value * w:.4f}"
+                )
         return node
-    
+
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
         h1 = self._hash_prompt(prompt1)
         h2 = self._hash_prompt(prompt2)
@@ -477,10 +496,16 @@ class PromptScorer:
         self._edit_distance_cache[pair_key] = dist
         return dist
 
-    def calculate_pairwise_metric(self, nodes: List[PromptNode], max_distance_pairs: int) -> List[float]:
+    def calculate_pairwise_metric(
+        self, nodes: List[PromptNode], max_distance_pairs: int
+    ) -> List[float]:
         """Попарные семантические расстояния между узлами"""
         values = []
         for i in range(min(len(nodes), max_distance_pairs)):
             for j in range(i + 1, min(len(nodes), max_distance_pairs)):
-                values.append(self.calculate_edit_distance(nodes[i].prompt_text, nodes[j].prompt_text))
+                values.append(
+                    self.calculate_edit_distance(
+                        nodes[i].prompt_text, nodes[j].prompt_text
+                    )
+                )
         return values

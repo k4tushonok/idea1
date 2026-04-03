@@ -50,9 +50,10 @@ htmlcov/
 /.BurpSuite/
 
 # Project-specific
-optimization_results/
-optimization_results_common_gen/
-optimization_results_gsm8k/
+notebooks/optimization_results/
+notebooks/optimization_results_common_gen/
+notebooks/optimization_results_gsm8k/
+notebooks/optimization_results_xsum/
 *.log
 .cache/
 temp/

@@ -12,6 +12,7 @@ from config import (
     DEFAULT_PRIORITY,
 )
 
+
 class TextGradientGenerator:
 
     def __init__(self, llm: BaseLLM, task_description: str = ""):
@@ -65,9 +66,7 @@ class TextGradientGenerator:
                 response = self.llm.invoke(prompt=gradient_prompt)
                 self._cache[gradient_prompt] = response
 
-            feedbacks = TaggedTextParser.parse_tagged_text(
-                response, "<START>", "<END>"
-            )
+            feedbacks = TaggedTextParser.parse_tagged_text(response, "<START>", "<END>")
             if is_enabled():
                 print(f"[diag] _get_gradients parsed {len(feedbacks)} feedbacks")
             return feedbacks
