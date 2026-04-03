@@ -1,3 +1,11 @@
+"""
+Глобальный оптимизатор промптов.
+
+Использует мета-оптимизацию: анализирует историю всех попыток, выявляет
+паттерны успеха/застоя и генерирует новые кандидаты промптов
+через LLM-вызовы с мета-промптом, содержащим историю и exemplars.
+"""
+
 from typing import List, Dict, Optional
 import hashlib
 import numpy as np
@@ -35,6 +43,13 @@ from config import (
 
 
 class GlobalOptimizer:
+    """Глобальный оптимизатор промптов.
+
+    Отвечает за масштабные изменения промптов на основе анализа
+    истории оптимизации и мета-промптов. Запускается периодически
+    или при обнаружении застоя в локальной оптимизации.
+    """
+
     def __init__(
         self,
         history_manager: HistoryManager,
@@ -71,6 +86,16 @@ class GlobalOptimizer:
         validation_examples: List[Example],
         baseline_score: Optional[float] = None,
     ) -> List[PromptNode]:
+        """Запуск глобальной оптимизации.
+
+        Шаги:
+          1. Анализ истории (застой, разнообразие, лучшие элементы)
+          2. Генерация кандидатов через мета-оптимизатор
+          3. Полная оценка на валидационном наборе
+          4. Отбор кандидатов с улучшением выше порога
+
+        Возвращает список принятых кандидатов.
+        """
         print("\n" + "=" * 60)
         print(f"GLOBAL OPTIMIZATION STEP | Generation {current_generation}")
         print("=" * 60)
@@ -224,6 +249,7 @@ class GlobalOptimizer:
         }
 
     def _extract_best_elements(self) -> Dict:
+        """Извлечение лучших элементов: промпты, общие фразы, топ-скоры"""
         best_nodes = self.history.get_best_nodes(top_k=TOP_BEST_NODES)
 
         if not best_nodes:
@@ -391,6 +417,11 @@ class GlobalOptimizer:
         current_generation: int,
         exemplars: Optional[List[Example]] = None,
     ) -> List[PromptNode]:
+        """Генерация кандидатов через N отдельных LLM-вызовов с мета-промптом.
+
+        Каждый вызов извлекает новый промпт из тегов <INS></INS>,
+        дедуплицирует по MD5 и edit-distance, фильтрует по длине
+        """
         best_nodes = history_analysis["best_elements"]["prompts"]
         if not best_nodes:
             return []
@@ -652,7 +683,7 @@ class GlobalOptimizer:
         }
 
     def get_best_strategies(self, top_k: int) -> List[Dict]:
-        """Получение самых успешных стратегий"""
+        """Получение самых успешных стратегий по скору кандидатов"""
         strategy_results = []
 
         for item in self.applied_strategies:

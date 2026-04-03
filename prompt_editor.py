@@ -1,3 +1,11 @@
+"""
+Редактор промптов.
+
+Применяет текстовые градиенты для генерации улучшенных вариантов
+промптов и создаёт Monte Carlo парафразы (synonym samples)
+для расширения пространства поиска.
+"""
+
 from typing import List, Dict, Optional
 from llm.llm_client import BaseLLM
 from llm.llm_response_parser import TaggedTextParser, MarkdownParser
@@ -8,6 +16,7 @@ from config import STEPS_PER_GRADIENT, MC_SAMPLES_PER_STEP, MIN_PROMPT_LENGTH
 
 
 class PromptEditor:
+    """Редактор промптов: применение градиентов и генерация парафраз."""
 
     def __init__(self, llm: BaseLLM, task_description: str = ""):
         self.llm = llm
@@ -20,11 +29,10 @@ class PromptEditor:
         gradient: TextGradient,
         parent_node: Optional[PromptNode] = None,
     ) -> List[PromptNode]:
-        """Применение градиента для генерации новых промптов
+        """Применение градиента для генерации новых промптов.
 
         LLM получает текущий промпт + ошибки + feedback и генерирует
-        ``STEPS_PER_GRADIENT`` улучшенных промптов, обёрнутых в
-        ``<START>/<END>`` теги.
+        STEPS_PER_GRADIENT улучшенных промптов в тегах <START>/<END>.
         """
         editing_prompt = Templates.build_editing_prompt(
             current_prompt,
@@ -110,7 +118,7 @@ class PromptEditor:
         n: int = None,
         parent_node: Optional[PromptNode] = None,
     ) -> List[PromptNode]:
-        """Генерация парафраз промпта"""
+        """Генерация MC-парафраз промпта для расширения пространства поиска."""
         n = n if n is not None else MC_SAMPLES_PER_STEP
         if n <= 0:
             return []

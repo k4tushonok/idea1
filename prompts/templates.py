@@ -1,3 +1,11 @@
+"""
+Шаблоны промптов для системы оптимизации.
+
+Предоставляет методы для построения промптов анализа (градиенты),
+редактирования, генерации синонимов и мета-оптимизации.
+Шаблоны загружаются из .txt-файлов в папке prompts/.
+"""
+
 from pathlib import Path
 from typing import List
 from data_structures import Example, TextGradient, PromptNode
@@ -9,9 +17,11 @@ DEFAULT_TASK_DESCRIPTION = "a general language task"
 
 
 class Templates:
+    """Статический класс-хелпер для построения промптов из шаблонов"""
+
     @staticmethod
     def load_template(name: str) -> str:
-        """Загрузка шаблона из файла prompts/<name>.txt"""
+        """Загрузка шаблона из файла prompts/<name>.txt."""
         path = TEMPLATES_DIR / f"{name}.txt"
         if not path.exists():
             raise FileNotFoundError(f"Template not found: {path}")
@@ -24,7 +34,7 @@ class Templates:
         include_expected: bool = True,
         truncate_input: int = 300,
     ) -> str:
-        """Форматирование списка примеров в текстовый блок"""
+        """Форматирование списка примеров в текстовый блок с усечением"""
         block = ""
         for i, example in enumerate(examples[:max_count], 1):
             input_text = example.input_text
@@ -41,7 +51,7 @@ class Templates:
 
     @staticmethod
     def format_error_string(failure_examples: List[Example]) -> str:
-        """Форматирование ошибок"""
+        """Форматирование ошибок в текстовый блок с номерами примеров"""
         error_string = ""
         for idx, ex in enumerate(failure_examples):
             error_string += f"## Example {idx + 1}\n"
@@ -59,10 +69,7 @@ class Templates:
         num_feedbacks: int = 5,
         task_description: str = "",
     ) -> str:
-        """Построение промпта для получения текстовых градиентов.
-
-        Использует простой формат: причины ошибок обёрнуты в <START>/<END> теги.
-        """
+        """Построение промпта для анализа ошибок и получения текстовых градиентов"""
         template = Templates.load_template("analysis")
         return template.format(
             current_prompt=current_prompt,
@@ -78,10 +85,7 @@ class Templates:
         num_variants: int,
         task_description: str = "",
     ) -> str:
-        """Построение промпта для применения градиента.
-
-        Использует формат: новые промпты обёрнуты в <START>/<END> теги.
-        """
+        """Построение промпта для применения градиента (новые промпты в <START>/<END>)"""
         template = Templates.load_template("editing")
         return template.format(
             current_prompt=current_prompt,
@@ -93,12 +97,13 @@ class Templates:
 
     @staticmethod
     def build_synonym_prompt(prompt_text: str) -> str:
-        """Построение промпта для генерации synonym/paraphrase."""
+        """Построение промпта для генерации парафразы промпта"""
         template = Templates.load_template("synonym")
         return template.format(prompt_text=prompt_text)
 
     @staticmethod
     def _bucketize_float(num: float, n_buckets: int = 100) -> int:
+        """Квантование float-значения [0,1] в целочисленный бакет"""
         num = max(0.0, min(1.0, num))
         return round(num * n_buckets)
 
@@ -110,6 +115,11 @@ class Templates:
         task_description: str = "",
         num_score_buckets: int = 100,
     ) -> str:
+        """Построение мета-промпта для глобальной оптимизации.
+
+        Включает историю узлов с квантованными оценками
+        и опциональные QA-exemplars
+        """
         sorted_nodes = sorted(history_nodes, key=lambda n: n.selection_score())
 
         history_lines = []

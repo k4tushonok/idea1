@@ -1,3 +1,11 @@
+"""
+Генератор текстовых градиентов.
+
+Анализирует ошибки промпта через LLM и формирует
+текстовые градиенты — описания причин ошибок и
+направлений улучшения на естественном языке.
+"""
+
 from typing import List, Dict, Optional, Tuple
 from prompts.templates import Templates
 import random
@@ -14,6 +22,11 @@ from config import (
 
 
 class TextGradientGenerator:
+    """Генератор текстовых градиентов для оптимизации промптов.
+
+    Семплирует ошибки, отправляет их LLM для анализа и
+    возвращает структурированные TextGradient с причинами ошибок.
+    """
 
     def __init__(self, llm: BaseLLM, task_description: str = ""):
         self.llm = llm
@@ -44,7 +57,7 @@ class TextGradientGenerator:
     ) -> List[str]:
         """Получение текстовых градиентов (причин ошибок) от LLM.
 
-        Формат ответа: причины обёрнуты в ``<START>`` / ``<END>`` теги
+        Ответ парсится из тегов <START>/<END>.
         """
         gradient_prompt = Templates.build_analysis_prompt(
             current_prompt=current_prompt,
@@ -80,12 +93,12 @@ class TextGradientGenerator:
         failure_examples: List[Example],
         success_examples: List[Example] = None,
     ) -> List[TextGradient]:
-        """Генерация градиентов ``get_gradients``.
+        """Генерация батча текстовых градиентов.
 
-        Для каждой из ``N_GRADIENTS`` итераций:
-          1. Случайно семплируем ``ERRORS_PER_GRADIENT`` ошибок
-          2. Получаем ``GRADIENTS_PER_ERROR`` feedback-причин от LLM
-          3. Оборачиваем каждый feedback в ``TextGradient``
+        Для каждой из N_GRADIENTS итераций:
+          1. Случайно семплируем ERRORS_PER_GRADIENT ошибок
+          2. Получаем GRADIENTS_PER_ERROR feedback-причин от LLM
+          3. Оборачиваем каждый feedback в TextGradient
         """
         if not failure_examples:
             return []

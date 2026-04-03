@@ -1,3 +1,11 @@
+"""
+Оценщик промптов.
+
+Выполняет промпты на примерах (единично и батчами),
+вычисляет метрики, кеширует результаты и разделяет
+примеры на успехи/провалы для дальнейшего анализа.
+"""
+
 from typing import List, Dict, Optional, Tuple
 from copy import deepcopy
 import statistics
@@ -27,6 +35,12 @@ _EVAL_TEMPERATURE: float = 0.1
 
 
 class PromptScorer:
+    """Оценщик промптов: выполнение, метрики, кеширование.
+
+    Поддерживает батчевое выполнение, многостадийные метрики,
+    кеш оценок и попарные расстояния для дедупликации.
+    """
+
     def __init__(self, llm: BaseLLM, metrics_config: Optional[List[Dict]] = None):
         self.llm = llm
         self.max_examples_per_node = MAX_EXAMPLES_PER_NODE
@@ -197,6 +211,7 @@ class PromptScorer:
         return examples
 
     def _build_batch_prompt(self, prompt: str, examples: List[Example]) -> str:
+        """Построение батчевого промпта для одновременной обработки нескольких примеров."""
         header = (
             "You must emulate multiple completely independent assistant calls.\n"
             "Each item below is a separate fresh interaction with no shared memory.\n"
@@ -222,6 +237,7 @@ class PromptScorer:
     def _parse_batch_response(
         self, response_text: str, n_expected: int
     ) -> Optional[List[str]]:
+        """Парсинг JSON-ответа батчевого выполнения в список ответов."""
         try:
             start = response_text.find("[")
             end = response_text.rfind("]") + 1
@@ -281,6 +297,11 @@ class PromptScorer:
         seed_offset: int = 0,
         stage: int = 2,
     ) -> Metrics:
+        """Оценка промпта: выполнение + вычисление всех активных метрик.
+
+        Поддерживает кеширование, семплирование примеров,
+        многостадийные метрики с нормализацией весов.
+        """
         _calls_start = llm_calls(self.llm)
         import time as _t
 
@@ -421,7 +442,7 @@ class PromptScorer:
         seed_offset: int = 0,
         stage: int = 1,
     ) -> PromptNode:
-        """Полная оценка узла: выполнение + метрики + разделение на успехи/провалы"""
+        """Полная оценка узла: выполнение + метрики + разделение на успехи/провалы."""
         import time as _t
 
         _node_t0 = _t.time()
@@ -480,6 +501,7 @@ class PromptScorer:
         return node
 
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
+        """Расстояние между промптами на основе Jaccard-расстояния множеств слов."""
         h1 = self._hash_prompt(prompt1)
         h2 = self._hash_prompt(prompt2)
         pair_key = frozenset((h1, h2))
@@ -499,7 +521,7 @@ class PromptScorer:
     def calculate_pairwise_metric(
         self, nodes: List[PromptNode], max_distance_pairs: int
     ) -> List[float]:
-        """Попарные семантические расстояния между узлами"""
+        """Попарные семантические расстояния между узлами (Jaccard)."""
         values = []
         for i in range(min(len(nodes), max_distance_pairs)):
             for j in range(i + 1, min(len(nodes), max_distance_pairs)):

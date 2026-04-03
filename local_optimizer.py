@@ -1,3 +1,13 @@
+"""
+Локальный оптимизатор промптов на основе текстовых градиентов.
+
+Реализует beam search с итеративным улучшением промптов:
+1. Находит ошибки на обучающем наборе
+2. Генерирует текстовые градиенты (причины ошибок)
+3. Применяет градиенты для создания вариантов + MC-парафразы
+4. Отбирает лучших кандидатов через pre-screening и полную оценку
+"""
+
 from typing import List, Dict, Optional, Set, Tuple
 from copy import deepcopy
 import time
@@ -33,6 +43,12 @@ from config import (
 
 
 class LocalOptimizer:
+    """Локальный оптимизатор: beam search + текстовые градиенты.
+
+    Каждая итерация: находит провалы → генерирует feedback →
+    редактирует промпт → отбирает лучших в beam.
+    """
+
     def __init__(
         self,
         history_manager: HistoryManager,
@@ -58,11 +74,17 @@ class LocalOptimizer:
 
     @staticmethod
     def _normalize_gradient_text(text: str) -> str:
+        """Нормализация текста градиента для дедупликации."""
         return " ".join((text or "").lower().split())
 
     def _select_gradients(
         self, gradients: List[TextGradient], max_pairs: int
     ) -> List[TextGradient]:
+        """Отбор градиентов с максимальным покрытием уникальных ошибок.
+
+        Жадный алгоритм: приоритет градиента → новое покрытие →
+        размер failure set → длина анализа.
+        """
         if max_pairs <= 0 or not gradients:
             return []
         if len(gradients) <= max_pairs:
@@ -109,6 +131,7 @@ class LocalOptimizer:
 
     @staticmethod
     def _example_search_score(ex: Example) -> float:
+        """Скор примера для ранжирования ошибок (чем ниже, тем тяжелее ошибка)."""
         if ex.actual_output is None:
             return 0.0
         if ex.is_numeric_qa_task():
@@ -124,6 +147,7 @@ class LocalOptimizer:
     def _select_failure_examples(
         self, failures: List[Example], limit: int
     ) -> List[Example]:
+        """Отбор ошибок для градиента: половина — самые сложные, остальные — равномерно."""
         if len(failures) <= limit:
             return failures
 
@@ -150,6 +174,16 @@ class LocalOptimizer:
         train_examples: List[Example],
         validation_examples: List[Example],
     ) -> PromptNode:
+        """Локальная оптимизация beam search.
+
+        Итеративно улучшает промпты в beam через:
+          Фаза 1-2: генерация градиентов и кандидатов
+          Фаза 3: предварительный отбор на мини-батче
+          Фаза 4: полная оценка
+          Фаза 5: обновление beam
+
+        Возвращает лучший узел из beam.
+        """
         print(f"\n{'='*60}")
         print(f"Starting Local Optimization")
         print(f"{'='*60}\n")
@@ -452,6 +486,10 @@ class LocalOptimizer:
     def _get_train_examples_outcomes(
         self, node: PromptNode, examples: List[Example], iteration: int = 0
     ) -> Tuple[List[Example], List[Example], float]:
+        """Выполнение промпта на train и разделение на успехи/провалы.
+
+        Возвращает (failures, successes, failure_rate).
+        """
         sample_size = min(TRAIN_FAILURE_SAMPLE_SIZE, len(examples))
         if sample_size < len(examples):
             sampled = random.sample(examples, sample_size)
@@ -668,7 +706,7 @@ class LocalOptimizer:
         return evaluated
 
     def get_statistics(self) -> Dict:
-        """Статистика оптимизации"""
+        """Статистика локальной оптимизации: итерации, улучшения, время, LLM-вызовы."""
         return {
             "total_iterations": self.total_iterations,
             "improvements_count": self.improvements_count,

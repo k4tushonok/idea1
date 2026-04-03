@@ -1,3 +1,15 @@
+"""
+Метрики оценки качества промптов.
+
+Содержит реализации метрик для разных задач:
+- ExactMatch, TokenF1 — для QA (SQuAD)
+- NumericExactMatch — для числовых задач (GSM8K)
+- ROUGE-L, METEOR, BERTScore — для задач генерации (XSUM, CommonGen)
+
+Все метрики наследуют CheapMetric
+и регистрируются в METRIC_REGISTRY.
+"""
+
 from typing import List, Dict
 from abc import ABC, abstractmethod
 from collections import Counter
@@ -10,6 +22,7 @@ from data_structures import Example
 
 
 def normalize_answer(s: str) -> str:
+    """Нормализация ответа: нижний регистр, удаление артиклей, пунктуации и лишних пробелов."""
     def remove_articles(text):
         regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
         return re.sub(regex, " ", text)
@@ -28,16 +41,19 @@ def normalize_answer(s: str) -> str:
 
 
 def get_tokens(s: str) -> List[str]:
+    """Токенизация нормализованного текста."""
     if not s:
         return []
     return normalize_answer(s).split()
 
 
 def compute_exact(a_gold: str, a_pred: str) -> int:
+    """Точное совпадение нормализованных ответов (0 или 1)."""
     return int(normalize_answer(a_gold) == normalize_answer(a_pred))
 
 
 def compute_f1(a_gold: str, a_pred: str) -> float:
+    """Токен-F1 между эталонным и предсказанным ответами."""
     gold_toks = get_tokens(a_gold)
     pred_toks = get_tokens(a_pred)
     common = Counter(gold_toks) & Counter(pred_toks)
@@ -57,6 +73,7 @@ _NO_ANSWER_VARIANTS: List[str] = ["", "no answer", "no answer."]
 
 
 def _get_gold_answers(ex: Example) -> List[str]:
+    """Получение списка эталонных ответов из метаданных или expected_output."""
     all_ans = ex.metadata.get("all_answers") if ex.metadata else None
     if all_ans is not None:
         # Filter out empty-after-normalization, keep unique
@@ -73,7 +90,7 @@ def _get_gold_answers(ex: Example) -> List[str]:
 
 
 class MetricEvaluator(ABC):
-    """Базовый класс метрики"""
+    """Базовый класс метрики оценки промптов."""
 
     name: str
 
@@ -81,6 +98,7 @@ class MetricEvaluator(ABC):
         pass
 
     def supports_examples(self, examples: List[Example]) -> bool:
+        """Поддерживает ли метрика данный набор примеров."""
         return True
 
     @abstractmethod
@@ -90,12 +108,14 @@ class MetricEvaluator(ABC):
 
 
 class CheapMetric(MetricEvaluator):
-    """Метрика, работающая без вызовов LLM — чистое текстовое сравнение."""
+    """Метрика без LLM-вызовов — чистое текстовое сравнение."""
 
     pass
 
 
 class ExactMatchMetric(CheapMetric):
+    """Метрика точного совпадения (Exact Match) для QA-задач."""
+
     name = "exact_match"
 
     def evaluate(self, prompt: str, examples: List[Example]) -> float:
@@ -113,6 +133,8 @@ class ExactMatchMetric(CheapMetric):
 
 
 class TokenF1Metric(CheapMetric):
+    """Метрика Token-F1 для QA-задач."""
+
     name = "token_f1"
 
     def evaluate(self, prompt: str, examples: List[Example]) -> float:
@@ -130,6 +152,8 @@ class TokenF1Metric(CheapMetric):
 
 
 class RougeLMetric(CheapMetric):
+    """Метрика ROUGE-L F1 для задач генерации текста."""
+
     name = "rouge_l"
 
     def supports_examples(self, examples: List[Example]) -> bool:
@@ -166,6 +190,8 @@ class RougeLMetric(CheapMetric):
 
 
 class MeteorMetric(CheapMetric):
+    """Метрика METEOR для задач генерации текста."""
+
     name = "meteor"
 
     def supports_examples(self, examples: List[Example]) -> bool:
@@ -199,6 +225,7 @@ class MeteorMetric(CheapMetric):
 
 
 def _extract_final_number(text: str) -> str:
+    """Извлечение финального числового ответа из текста рассуждения модели."""
     if text is None:
         return ""
     text = text.strip()
@@ -226,6 +253,8 @@ def _extract_final_number(text: str) -> str:
 
 
 class NumericExactMatchMetric(CheapMetric):
+    """Точное совпадение извлечённых числовых ответов"""
+
     name = "numeric_exact_match"
 
     def evaluate(self, prompt: str, examples: List[Example]) -> float:
@@ -249,9 +278,7 @@ class NumericExactMatchMetric(CheapMetric):
 
 
 class BertScoreMetric(CheapMetric):
-    """BERTScore F1 — model-based semantic similarity metric.
-    Uses bert_score library with a lightweight default model.
-    """
+    """Метрика BERTScore F1 — семантическое сходство на основе BERT-эмбеддингов."""
 
     name = "bertscore"
 

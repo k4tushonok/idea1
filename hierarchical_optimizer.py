@@ -1,3 +1,12 @@
+"""
+Иерархический оптимизатор промптов.
+
+Оркестрирует локальную и глобальную оптимизацию в едином цикле
+поколений с early stopping. Локальный оптимизатор улучшает
+промпты через текстовые градиенты, глобальный — через
+мета-анализ истории.
+"""
+
 from typing import List, Dict, Optional
 import time
 import json
@@ -21,6 +30,13 @@ from config import MAX_GENERATIONS, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 
 class HierarchicalOptimizer:
+    """Главный оркестратор оптимизации промптов.
+
+    Управляет циклом поколений, чередуя локальную оптимизацию
+    (градиенты + редактирование) и глобальную (мета-оптимизация).
+    Поддерживает early stopping, сохранение результатов и отчётность.
+    """
+
     def __init__(self, metrics_config=None, task_description: str = ""):
         self.llm = create_llm()
         self.history = HistoryManager()
@@ -59,6 +75,12 @@ class HierarchicalOptimizer:
         test_examples: Optional[List[Example]] = None,
         save_dir: Optional[str] = None,
     ) -> PromptNode:
+        """Запуск полного цикла оптимизации промпта.
+
+        Принимает начальный промпт и итеративно улучшает его,
+        чередуя локальную и глобальную фазы. Возвращает
+        лучший найденный PromptNode.
+        """
         self.start_time = time.time()
 
         # Создаем начальный узел
@@ -286,6 +308,11 @@ class HierarchicalOptimizer:
         return self.best_node
 
     def get_optimization_report(self) -> Dict:
+        """Формирование полного отчёта об оптимизации.
+
+        Включает: временные метки, результаты, историю,
+        статистику компонентов, траекторию лучшего узла.
+        """
         if not self.best_node:
             return {"error": "Optimization not run yet"}
 
@@ -344,7 +371,7 @@ class HierarchicalOptimizer:
         return report
 
     def visualize_optimization_trajectory(self) -> str:
-        """Создание текстовой визуализации траектории оптимизации"""
+        """Создание текстовой ASCII-визуализации траектории оптимизации"""
         if not self.optimization_log:
             return "No optimization data available"
 
@@ -376,7 +403,7 @@ class HierarchicalOptimizer:
     def _save_final_results(
         self, save_dir: str, test_examples: Optional[List[Example]] = None
     ):
-        """Сохранение финальных результатов"""
+        """Сохранение финальных результатов: история, отчёт, лучший промпт, траектория"""
         os.makedirs(save_dir, exist_ok=True)
 
         # 1. Сохраняем историю

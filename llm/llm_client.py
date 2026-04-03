@@ -1,3 +1,10 @@
+"""
+Клиенты LLM-провайдеров.
+
+Поддерживаемые провайдеры: OpenAI, Gemini, локальный Qwen.
+Включает двухуровневый кеш (in-memory LRU + SQLite на диске).
+"""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from openai import OpenAI
@@ -14,6 +21,13 @@ import hashlib
 
 
 class BaseLLM(ABC):
+    """Базовый класс LLM с двухуровневым кешированием.
+
+    Кеш 1 уровня: in-memory OrderedDict (LRU, до _cache_max записей).
+    Кеш 2 уровня: SQLite на диске (TTL 7 дней).
+    Кеширование активно только при temperature=0.
+    """
+
     def __init__(self):
         self.total_invocations = 0
         self.total_api_calls = 0
@@ -33,6 +47,7 @@ class BaseLLM(ABC):
                 self._persistent = None
 
     def invoke(self, prompt: str, temperature: Optional[float] = None) -> str:
+        """Вызов LLM с кешированием."""
         self.total_invocations += 1
 
         effective_temp = temperature if temperature is not None else LOCAL_TEMPERATURE
@@ -94,16 +109,20 @@ class BaseLLM(ABC):
 
     @abstractmethod
     def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
+        """Непосредственный вызов API провайдера. Реализуется в подклассах."""
         pass
 
 
 class SQLiteCache:
+    """Персистентный кеш LLM-ответов на основе SQLite с TTL."""
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._ensure_table()
 
     def _ensure_table(self):
+        """Создание таблицы кеша, если она не существует."""
         cur = self._conn.cursor()
         cur.execute(
             """
@@ -117,6 +136,7 @@ class SQLiteCache:
         self._conn.commit()
 
     def get(self, key: str, ttl: Optional[int] = None) -> Optional[str]:
+        """Получение значения из кеша; удаляет просроченные записи по TTL."""
         try:
             cur = self._conn.cursor()
             cur.execute("SELECT value, ts FROM llm_cache WHERE key = ?", (key,))
@@ -137,6 +157,7 @@ class SQLiteCache:
             return None
 
     def set(self, key: str, value: str):
+        """Сохранение значения в кеш с текущей временной меткой."""
         try:
             ts = int(time.time())
             cur = self._conn.cursor()
@@ -151,6 +172,8 @@ class SQLiteCache:
 
 
 class LocalQwenModel(BaseLLM):
+    """Локальная модель Qwen через HuggingFace Transformers (CUDA)."""
+
     def __init__(self):
         super().__init__()
         self.model_name = MODEL
@@ -185,6 +208,8 @@ class LocalQwenModel(BaseLLM):
 
 
 class OpenAILLM(BaseLLM):
+    """Клиент OpenAI API (GPT-модели)."""
+
     def __init__(self):
         super().__init__()
         self.client = OpenAI(api_key=API_KEY)
@@ -201,6 +226,8 @@ class OpenAILLM(BaseLLM):
 
 
 class GeminiLLM(BaseLLM):
+    """Клиент Google Gemini API."""
+
     def __init__(self):
         super().__init__()
         self.client = genai.Client(api_key=API_KEY)
@@ -218,6 +245,7 @@ class GeminiLLM(BaseLLM):
 
 
 def create_llm() -> BaseLLM:
+    """Фабричный метод: создание LLM-клиента по настройке PROVIDER."""
     provider = PROVIDER
 
     if provider == "openai":

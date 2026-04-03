@@ -1,3 +1,11 @@
+"""
+Менеджер истории оптимизации промптов.
+
+Хранит все узлы PromptNode с индексацией по поколениям, источникам
+и тексту промпта. Предоставляет методы для анализа истории,
+определения застоя, статистики и сохранения в JSON.
+"""
+
 from typing import List, Dict, Optional
 from collections import defaultdict
 import json
@@ -14,6 +22,12 @@ from config import (
 
 
 class HistoryManager:
+    """Хранилище и индекс всех узлов оптимизации.
+
+    Поддерживает индексы по поколениям, источникам и тексту промпта,
+    обеспечивает быстрый поиск, анализ успешных операций и сериализацию.
+    """
+
     def __init__(self):
         self.nodes: Dict[str, PromptNode] = {}  # Основное хранилище: id -> PromptNode
         self.nodes_by_generation: Dict[int, List[str]] = defaultdict(
@@ -30,6 +44,7 @@ class HistoryManager:
         self.creation_time = datetime.now()  # Время создания истории
 
     def add_node(self, node: PromptNode) -> str:
+        """Добавление узла в историю с обновлением всех индексов и связей."""
         # Добавляем в основное хранилище
         self.nodes[node.id] = node
 
@@ -161,7 +176,7 @@ class HistoryManager:
         return dict(operation_counts)
 
     def get_stagnation_info(self) -> Dict[str, any]:
-        """Определение застоя в оптимизации"""
+        """Определение застоя: сравнение лучших оценок за последние поколения."""
         current_gen = (
             max(self.nodes_by_generation.keys()) if self.nodes_by_generation else 0
         )
@@ -201,7 +216,7 @@ class HistoryManager:
         }
 
     def get_optimization_summary(self) -> Dict[str, any]:
-        """Сводка оптимизации для глобального оптимизатора"""
+        """Сводка оптимизации: лучшие узлы, успешные операции, распределение по источникам."""
         # Получаем лучшие узлы
         best_nodes = self.get_best_nodes(top_k=TOP_BEST_NODES)
 

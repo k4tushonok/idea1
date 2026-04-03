@@ -1,3 +1,14 @@
+"""
+Структуры данных для системы оптимизации промптов.
+
+Определяет основные классы:
+- Example — пример для обучения/тестирования с методами оценки корректности
+- TextGradient — текстовый градиент (анализ ошибок + рекомендации)
+- EditOperation — операция редактирования промпта
+- Metrics — метрики оценки с композитным скором
+- PromptNode — узел в дереве эволюции промптов
+"""
+
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Any, ClassVar
 from datetime import datetime
@@ -18,6 +29,7 @@ _NO_ANSWER_VARIANTS = ["", "no answer", "no answer."]
 
 
 def _normalize_answer(s: str) -> str:
+    """Нормализация ответа: приведение к нижнему регистру, удаление артиклей, пунктуации и лишних пробелов"""
     def remove_articles(text):
         regex = _re.compile(r"\b(a|an|the)\b", _re.UNICODE)
         return _re.sub(regex, " ", text)
@@ -78,6 +90,7 @@ class Example:
     metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные
 
     def is_numeric_qa_task(self) -> bool:
+        """Проверка, является ли задача числовым QA"""
         if not self.metadata:
             return False
         if self.metadata.get("task_type") == "numeric_qa":
@@ -85,6 +98,7 @@ class Example:
         return bool(self.metadata.get("numeric_qa"))
 
     def _gold_answers(self) -> List[str]:
+        """Получение списка всех допустимых эталонных ответов из метаданных или expected_output"""
         all_ans = self.metadata.get("all_answers") if self.metadata else None
         if all_ans is not None:
             gold_list = [a for a in all_ans if _normalize_answer(a)]
@@ -97,6 +111,7 @@ class Example:
 
     @staticmethod
     def _compute_token_f1(actual: str, expected: str) -> float:
+        """Вычисление Token-F1 между фактическим и ожидаемым ответами на уровне токенов"""
         from collections import Counter as _Counter
 
         actual_norm = _normalize_answer(actual)
@@ -126,6 +141,7 @@ class Example:
         )
 
     def qa_exact_match_score(self) -> float:
+        """Точное совпадение с любым из эталонных ответов (0.0 или 1.0)"""
         if self.actual_output is None:
             return 0.0
         actual_norm = _normalize_answer(self.actual_output)
@@ -135,6 +151,7 @@ class Example:
         )
 
     def qa_token_f1_score(self) -> float:
+        """Максимальный Token-F1 среди всех эталонных ответов"""
         if self.actual_output is None:
             return 0.0
         return max(
@@ -143,6 +160,7 @@ class Example:
         )
 
     def numeric_exact_match_score(self) -> float:
+        """Точное совпадение извлечённого числового ответа с эталоном"""
         if self.actual_output is None:
             return 0.0
         actual_num = _normalize_answer(_extract_final_number(self.actual_output))
@@ -152,6 +170,7 @@ class Example:
         )
 
     def numeric_token_f1_score(self) -> float:
+        """Токен-F1 для числовых ответов после извлечения финального числа"""
         if self.actual_output is None:
             return 0.0
         actual_num = _extract_final_number(self.actual_output)
@@ -161,6 +180,7 @@ class Example:
         )
 
     def generation_concept_coverage_score(self) -> float:
+        """Доля концептов из метаданных, покрытых в сгенерированном ответе"""
         if (
             self.actual_output is None
             or not self.metadata
@@ -180,6 +200,7 @@ class Example:
 
     @staticmethod
     def _lcs_length(x: List[str], y: List[str]) -> int:
+        """Длина наибольшей общей подпоследовательности (LCS) двух списков"""
         m, n = len(x), len(y)
         prev = [0] * (n + 1)
         for i in range(1, m + 1):
@@ -194,6 +215,7 @@ class Example:
 
     @classmethod
     def _rouge_l_f1(cls, prediction: str, reference: str) -> float:
+        """Вычисление ROUGE-L F1 между предсказанием и эталоном на основе LCS"""
         pred_tokens = _normalize_answer(prediction).split()
         ref_tokens = _normalize_answer(reference).split()
         if not pred_tokens or not ref_tokens:
@@ -206,6 +228,7 @@ class Example:
         return 2 * precision * recall / (precision + recall)
 
     def generation_reference_token_f1_score(self) -> float:
+        """Максимальный Token-F1 относительно всех референсов для задач генерации"""
         if self.actual_output is None:
             return 0.0
         references = []
@@ -220,6 +243,7 @@ class Example:
         )
 
     def generation_reference_rouge_l_score(self) -> float:
+        """Максимальный ROUGE-L F1 относительно всех референсов для задач генерации"""
         if self.actual_output is None:
             return 0.0
         references = []
@@ -232,12 +256,14 @@ class Example:
         return max(self._rouge_l_f1(self.actual_output, ref) for ref in references)
 
     def generation_optimization_score(self) -> float:
+        """Композитный скор для задач генерации: 55% покрытие + 25% token-F1 + 20% ROUGE-L"""
         coverage = self.generation_concept_coverage_score()
         ref_f1 = self.generation_reference_token_f1_score()
         rouge_l = self.generation_reference_rouge_l_score()
         return 0.55 * coverage + 0.25 * ref_f1 + 0.20 * rouge_l
 
     def is_generation_success(self) -> bool:
+        """Успешна ли генерация: полное покрытие концептов и optimization_score ≥ 0.68"""
         if self.actual_output is None:
             return False
         coverage = self.generation_concept_coverage_score()
@@ -246,11 +272,13 @@ class Example:
         return self.generation_optimization_score() >= 0.68
 
     def is_strict_qa_success(self) -> bool:
+        """Строгий критерий успеха для QA: точное совпадение равно 1.0"""
         if self.actual_output is None:
             return False
         return self.qa_exact_match_score() >= 1.0
 
     def is_numeric_qa_success(self) -> bool:
+        """Успех для числового QA: точное совпадение извлечённого числа"""
         if self.actual_output is None:
             return False
         return self.numeric_exact_match_score() >= 1.0
@@ -326,10 +354,12 @@ class Example:
         return f1 >= CORRECTNESS_TOKEN_F1_THRESHOLD
 
     def to_dict(self) -> Dict:
+        """Сериализация примера в словарь"""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Example":
+        """Создание примера из словаря"""
         return cls(**data)
 
 
@@ -471,12 +501,14 @@ class PromptNode:
             self.children_ids.append(child_id)
 
     def selection_score(self) -> float:
+        """Оценка для отбора: приоритет у full_validation_score, иначе композитный скор"""
         try:
             return float(self.metadata["full_validation_score"])
         except Exception:
             return self.metrics.composite_score()
 
     def selection_accuracy(self) -> float:
+        """Точность для отбора: full_validation_accuracy или accuracy из метрик"""
         try:
             return float(self.metadata["full_validation_accuracy"])
         except Exception:
