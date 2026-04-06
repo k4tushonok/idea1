@@ -1,11 +1,11 @@
 """
-Локальный оптимизатор промптов на основе текстовых градиентов.
+Local prompt optimizer based on textual gradients.
 
-Реализует beam search с итеративным улучшением промптов:
-1. Находит ошибки на обучающем наборе
-2. Генерирует текстовые градиенты (причины ошибок)
-3. Применяет градиенты для создания вариантов + MC-парафразы
-4. Отбирает лучших кандидатов через pre-screening и полную оценку
+Implements beam search with iterative prompt improvement:
+1. Find failures on the training set
+2. Generate textual gradients (error causes)
+3. Apply gradients to create variants + MC paraphrases
+4. Select top candidates via pre-screening and full evaluation
 """
 
 from typing import List, Dict, Optional, Set, Tuple
@@ -43,10 +43,10 @@ from config import (
 
 
 class LocalOptimizer:
-    """Локальный оптимизатор: beam search + текстовые градиенты.
+    """Local optimizer: beam search + textual gradients.
 
-    Каждая итерация: находит провалы → генерирует feedback →
-    редактирует промпт → отбирает лучших в beam.
+    Each iteration: find failures → generate feedback →
+    edit prompt → select top candidates into beam.
     """
 
     def __init__(
@@ -62,28 +62,28 @@ class LocalOptimizer:
         self.gradient_gen = gradient_generator
         self.editor = prompt_editor
 
-        # Статистика локальной оптимизации
+        # Local optimization statistics
         self.total_iterations = 0
         self.improvements_count = 0
         self.iteration_stats: List[Dict] = []
 
-        # Кэш для предотвращения повторной оценки
+        # Evaluation cache to avoid re-evaluating the same prompt
         self._train_outcomes_cache: Dict[str, Tuple] = {}
         self._evaluated_prompts: Set[str] = set()
         self.llm = llm
 
     @staticmethod
     def _normalize_gradient_text(text: str) -> str:
-        """Нормализация текста градиента для дедупликации."""
+        """Normalize gradient text for deduplication."""
         return " ".join((text or "").lower().split())
 
     def _select_gradients(
         self, gradients: List[TextGradient], max_pairs: int
     ) -> List[TextGradient]:
-        """Отбор градиентов с максимальным покрытием уникальных ошибок.
+        """Select gradients with maximum coverage of unique failures.
 
-        Жадный алгоритм: приоритет градиента → новое покрытие →
-        размер failure set → длина анализа.
+        Greedy algorithm: priority score → new failure coverage →
+        total failure set size → analysis text length.
         """
         if max_pairs <= 0 or not gradients:
             return []
@@ -131,7 +131,7 @@ class LocalOptimizer:
 
     @staticmethod
     def _example_search_score(ex: Example) -> float:
-        """Скор примера для ранжирования ошибок (чем ниже, тем тяжелее ошибка)."""
+        """Score an example for failure ranking (lower = harder failure)."""
         if ex.actual_output is None:
             return 0.0
         if ex.is_numeric_qa_task():
@@ -147,7 +147,7 @@ class LocalOptimizer:
     def _select_failure_examples(
         self, failures: List[Example], limit: int
     ) -> List[Example]:
-        """Отбор ошибок для градиента: половина — самые сложные, остальные — равномерно."""
+        """Select failures for gradient generation: half hardest, rest sampled uniformly."""
         if len(failures) <= limit:
             return failures
 
@@ -174,25 +174,25 @@ class LocalOptimizer:
         train_examples: List[Example],
         validation_examples: List[Example],
     ) -> PromptNode:
-        """Локальная оптимизация beam search.
+        """Run local beam-search optimization.
 
-        Итеративно улучшает промпты в beam через:
-          Фаза 1-2: генерация градиентов и кандидатов
-          Фаза 3: предварительный отбор на мини-батче
-          Фаза 4: полная оценка
-          Фаза 5: обновление beam
+        Iteratively improves prompts in the beam through:
+          Phase 1-2: gradient generation and candidate creation
+          Phase 3:   pre-screening on a mini-batch
+          Phase 4:   full evaluation
+          Phase 5:   beam update
 
-        Возвращает лучший узел из beam.
+        Returns the best node from the beam.
         """
         print(f"\n{'='*60}")
         print(f"Starting Local Optimization")
         print(f"{'='*60}\n")
 
-        # Добавляем начальный узел в историю, если его там нет
+        # Add starting node to history if not already there
         if not self.history.get_node(starting_node.id):
             self.history.add_node(starting_node)
 
-        # Оцениваем начальный узел, если не оценен
+        # Evaluate starting node if not yet evaluated
         if not starting_node.is_evaluated:
             print(f"Evaluating starting node...")
             starting_node = self.scorer.evaluate_node(
@@ -201,7 +201,7 @@ class LocalOptimizer:
             self.history.update_node(starting_node.id, starting_node)
             print(f"Starting score: {starting_node.metrics.composite_score():.3f}")
 
-        # Инициализация beam search
+        # Initialise beam search
         current_beam: List[PromptNode] = [starting_node]
         best_score = starting_node.selection_score()
         no_improve_iters = 0
@@ -220,7 +220,7 @@ class LocalOptimizer:
             if is_enabled():
                 print_population(f"beam state iter={iteration + 1}", current_beam)
 
-            # Ротация мини-батча для защиты от переобучения
+            # Rotate mini-batch to protect against overfitting
             mini_batch = self._create_mini_batch(validation_examples, seed=iteration)
             if is_enabled():
                 print(
@@ -228,13 +228,13 @@ class LocalOptimizer:
                 )
 
             # ================================================================
-            # ФАЗА 1+2: ГЕНЕРАЦИЯ ГРАДИЕНТОВ И КАНДИДАТОВ
-            # Каждый член beam:
-            #   1. Находит провалы, семплирует случайные ошибки
-            #   2. Получает gradient feedbacks (<START>/<END>)
-            #   3. Применяет gradient → новые промпты (<START>/<END>)
-            #   4. Генерирует MC synonyms/parарhrases
-            #   5. Все кандидаты объединяются
+            # PHASE 1+2: GRADIENT GENERATION AND CANDIDATE CREATION
+            # For each beam member:
+            #   1. Find failures, sample random errors
+            #   2. Obtain gradient feedbacks (<START>/<END>)
+            #   3. Apply gradient → new prompts (<START>/<END>)
+            #   4. Generate MC synonym/paraphrase variants
+            #   5. Merge all candidates
             # ================================================================
             all_candidates: List[PromptNode] = []
 
@@ -299,7 +299,7 @@ class LocalOptimizer:
                             parent_node=parent,
                         )
                         mc_sampled.extend(synonyms)
-                    # Также synonym для текущего промпта
+                    # Also generate synonyms for the current parent prompt
                     original_synonyms = self.editor.generate_synonyms(
                         parent.prompt_text,
                         n=MC_SAMPLES_PER_STEP,
@@ -312,8 +312,8 @@ class LocalOptimizer:
                     {prompt_id(n.prompt_text): n for n in combined}.values()
                 )  # dedup
 
-                # REJECT_ON_ERRORS: отбрасываем кандидатов, которые не
-                # улучшают исправление текущих ошибок относительно родителя.
+                # REJECT_ON_ERRORS: discard candidates that do not
+                # improve correction of current errors relative to the parent.
                 if combined and REJECT_ON_ERRORS and failure_examples:
                     error_exs = random.sample(
                         failure_examples,
@@ -365,7 +365,7 @@ class LocalOptimizer:
                 )
                 continue
 
-            # Дедупликация между собой и относительно beam
+            # Deduplicate across candidates and against current beam
             unique_candidates = self._deduplicate_candidates(
                 all_candidates, current_beam
             )
@@ -381,9 +381,9 @@ class LocalOptimizer:
                 continue
 
             # ================================================================
-            # ФАЗА 3: ПРЕДВАРИТЕЛЬНЫЙ ОТБОР НА МИНИ-БАТЧЕ
-            # Оцениваем кандидатов сначала на маленьком подмножестве, затем
-            # полностью оцениваем только top-K.
+            # PHASE 3: PRE-SCREENING ON MINI-BATCH
+            # Evaluate candidates first on a small subset, then
+            # fully evaluate only top-K.
             # ================================================================
             if len(unique_candidates) > PRE_SCREEN_TOP_K:
                 print(
@@ -405,14 +405,14 @@ class LocalOptimizer:
                 top_candidates = unique_candidates
 
             # ================================================================
-            # ФАЗА 4: ПОЛНАЯ ОЦЕНКА
+            # PHASE 4: FULL EVALUATION
             # ================================================================
             evaluated_candidates = self._evaluate_candidates(
                 top_candidates, validation_examples
             )
             print(f"Evaluated {len(evaluated_candidates)} candidates")
 
-            # Порог качества: средний score в beam
+            # Quality threshold: average score across beam
             beam_scores = [n.selection_score() for n in current_beam]
             baseline_score = sum(beam_scores) / len(beam_scores) * 0.95
             eligible_candidates = [
@@ -426,10 +426,10 @@ class LocalOptimizer:
 
             if eligible_candidates:
                 # ================================================================
-                # ФАЗА 5: ОБНОВЛЕНИЕ BEAM (top-K по score)
+                # PHASE 5: BEAM UPDATE (top-K by score)
                 # ================================================================
                 all_for_beam = eligible_candidates + current_beam
-                # Дедупликация по тексту промпта, затем top-K
+                # Deduplicate by prompt text, then top-K
                 seen_pids = set()
                 unique_beam = []
                 for n in sorted(
@@ -486,9 +486,9 @@ class LocalOptimizer:
     def _get_train_examples_outcomes(
         self, node: PromptNode, examples: List[Example], iteration: int = 0
     ) -> Tuple[List[Example], List[Example], float]:
-        """Выполнение промпта на train и разделение на успехи/провалы.
+        """Execute the prompt on the training set and split into successes and failures.
 
-        Возвращает (failures, successes, failure_rate).
+        Returns (failures, successes, failure_rate).
         """
         sample_size = min(TRAIN_FAILURE_SAMPLE_SIZE, len(examples))
         if sample_size < len(examples):
@@ -537,8 +537,8 @@ class LocalOptimizer:
     def _create_mini_batch(
         self, validation_examples: List[Example], seed: int = 0
     ) -> List[Example]:
-        """Ротируемый мини-батч для pre-screening
-        Разный seed на каждой итерации предотвращает переобучение на фиксированном подмножестве
+        """Create a rotating mini-batch for pre-screening.
+        Different seeds per iteration prevent overfitting to a fixed subset.
         """
         mini_size = max(5, int(len(validation_examples) * MINI_BATCH_RATIO))
         if mini_size >= len(validation_examples):
@@ -550,11 +550,10 @@ class LocalOptimizer:
     def _pre_screen_candidates(
         self, candidates: List[PromptNode], mini_batch: List[Example]
     ) -> List[float]:
-        """Быстрая оценка на мини-батче для предварительного отбора.
-        Возвращает список композитных оценок, по одной на кандидата."""
-        import time as _t
-
-        _ps_t0 = _t.time()
+        """Quick evaluation on a mini-batch for pre-screening.
+        Returns a list of composite scores, one per candidate.
+        """
+        _ps_t0 = time.time()
         _ps_calls0 = llm_calls(self.scorer.llm)
         scores = []
         for i, candidate in enumerate(candidates):
@@ -573,7 +572,7 @@ class LocalOptimizer:
                 print(f"  Pre-screen error {i+1}: {e}")
                 scores.append(0.0)
         if is_enabled():
-            _ps_elapsed = _t.time() - _ps_t0
+            _ps_elapsed = time.time() - _ps_t0
             _ps_calls1 = llm_calls(self.scorer.llm)
             print(
                 f"[diag] local pre-screen summary: {len(candidates)} candidates, "
@@ -585,7 +584,7 @@ class LocalOptimizer:
     def _deduplicate_candidates(
         self, candidates: List[PromptNode], beam: List[PromptNode]
     ) -> List[PromptNode]:
-        """Дедупликация кандидатов между собой и относительно существующих членов beam."""
+        """Deduplicate candidates against each other and against existing beam members."""
         unique: List[PromptNode] = []
         seen = set()
         beam_pids = {prompt_id(n.prompt_text) for n in beam}
@@ -607,7 +606,7 @@ class LocalOptimizer:
     def _record_iteration_stats(
         self, iteration: int, start_time: float, calls_before: int
     ):
-        """Запись статистики для данной итерации."""
+        """Record statistics for the current iteration."""
         iteration_time = time.time() - start_time
         calls_after = getattr(self.scorer.llm, "total_api_calls", 0)
         calls_delta = calls_after - calls_before
@@ -629,10 +628,10 @@ class LocalOptimizer:
         candidates: List[PromptNode],
         error_examples: List[Example],
     ) -> List[float]:
-        """Быстрая оценка кандидатов на error-примерах
+        """Quick scoring of candidates on error examples.
 
-        Для каждого кандидата запускаем промпт на error_examples,
-        считаем долю исправленных ошибок.
+        For each candidate, execute the prompt on error_examples
+        and compute the fraction of corrected errors.
         """
         scores = []
         for c in candidates:
@@ -657,11 +656,11 @@ class LocalOptimizer:
     def _evaluate_candidates(
         self, candidates: List[PromptNode], validation_examples: List[Example]
     ) -> List[PromptNode]:
-        """Оценка кандидатов на валидационном наборе"""
+        """Evaluate candidates on the validation set."""
         evaluated = []
 
         for i, candidate in enumerate(candidates):
-            # Проверяем, не оценивали ли мы уже этот промпт
+            # Skip if already evaluated
             key = candidate.prompt_text
             if key in self._evaluated_prompts:
                 print(
@@ -706,7 +705,7 @@ class LocalOptimizer:
         return evaluated
 
     def get_statistics(self) -> Dict:
-        """Статистика локальной оптимизации: итерации, улучшения, время, LLM-вызовы."""
+        """Local optimization statistics: iterations, improvements, time, LLM calls."""
         return {
             "total_iterations": self.total_iterations,
             "improvements_count": self.improvements_count,

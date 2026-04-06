@@ -1,17 +1,14 @@
 """
-Клиенты LLM-провайдеров.
+LLM provider clients.
 
-Поддерживаемые провайдеры: OpenAI, Gemini, локальный Qwen.
-Включает двухуровневый кеш (in-memory LRU + SQLite на диске).
+Supported providers: OpenAI, Gemini, local Qwen.
+Includes a two-level cache (in-memory LRU + SQLite on disk).
 """
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from openai import OpenAI
-from google import genai
-from google.genai import types as genai_types
 from config import PROVIDER, API_KEY, MODEL, LOCAL_TEMPERATURE, MAX_TOKENS
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import OrderedDict
 from typing import Any, Tuple, Optional
 import sqlite3
@@ -21,11 +18,11 @@ import hashlib
 
 
 class BaseLLM(ABC):
-    """Базовый класс LLM с двухуровневым кешированием.
+    """Base LLM class with two-level caching.
 
-    Кеш 1 уровня: in-memory OrderedDict (LRU, до _cache_max записей).
-    Кеш 2 уровня: SQLite на диске (TTL 7 дней).
-    Кеширование активно только при temperature=0.
+    Level-1 cache: in-memory OrderedDict (LRU, up to _cache_max entries).
+    Level-2 cache: SQLite on disk (TTL 7 days).
+    Caching is active only at temperature=0.
     """
 
     def __init__(self):
@@ -47,7 +44,7 @@ class BaseLLM(ABC):
                 self._persistent = None
 
     def invoke(self, prompt: str, temperature: Optional[float] = None) -> str:
-        """Вызов LLM с кешированием."""
+        """Invoke the LLM with caching."""
         self.total_invocations += 1
 
         effective_temp = temperature if temperature is not None else LOCAL_TEMPERATURE
@@ -109,12 +106,12 @@ class BaseLLM(ABC):
 
     @abstractmethod
     def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
-        """Непосредственный вызов API провайдера. Реализуется в подклассах."""
+        """Call the provider API directly. Implemented in subclasses."""
         pass
 
 
 class SQLiteCache:
-    """Персистентный кеш LLM-ответов на основе SQLite с TTL."""
+    """Persistent LLM response cache backed by SQLite with TTL support."""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -122,7 +119,7 @@ class SQLiteCache:
         self._ensure_table()
 
     def _ensure_table(self):
-        """Создание таблицы кеша, если она не существует."""
+        """Create the cache table if it does not exist."""
         cur = self._conn.cursor()
         cur.execute(
             """
@@ -136,7 +133,7 @@ class SQLiteCache:
         self._conn.commit()
 
     def get(self, key: str, ttl: Optional[int] = None) -> Optional[str]:
-        """Получение значения из кеша; удаляет просроченные записи по TTL."""
+        """Retrieve a value from cache; deletes expired entries based on TTL."""
         try:
             cur = self._conn.cursor()
             cur.execute("SELECT value, ts FROM llm_cache WHERE key = ?", (key,))
@@ -157,7 +154,7 @@ class SQLiteCache:
             return None
 
     def set(self, key: str, value: str):
-        """Сохранение значения в кеш с текущей временной меткой."""
+        """Store a value in cache with the current timestamp."""
         try:
             ts = int(time.time())
             cur = self._conn.cursor()
@@ -172,10 +169,11 @@ class SQLiteCache:
 
 
 class LocalQwenModel(BaseLLM):
-    """Локальная модель Qwen через HuggingFace Transformers (CUDA)."""
+    """Local Qwen model via HuggingFace Transformers (requires CUDA)."""
 
     def __init__(self):
         super().__init__()
+        from transformers import AutoModelForCausalLM, AutoTokenizer  # lazy: only if local provider
         self.model_name = MODEL
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name, torch_dtype="auto", device_map="cuda"
@@ -208,7 +206,7 @@ class LocalQwenModel(BaseLLM):
 
 
 class OpenAILLM(BaseLLM):
-    """Клиент OpenAI API (GPT-модели)."""
+    """OpenAI API client (GPT models)."""
 
     def __init__(self):
         super().__init__()
@@ -226,15 +224,19 @@ class OpenAILLM(BaseLLM):
 
 
 class GeminiLLM(BaseLLM):
-    """Клиент Google Gemini API."""
+    """Google Gemini API client."""
 
     def __init__(self):
         super().__init__()
+        from google import genai  # lazy: only if gemini provider
+        from google.genai import types as genai_types  # noqa: F401
+        self._genai = genai
+        self._genai_types = genai_types
         self.client = genai.Client(api_key=API_KEY)
         self.model = MODEL
 
     def _generate(self, prompt: str, temperature: float = LOCAL_TEMPERATURE) -> str:
-        config = genai_types.GenerateContentConfig(
+        config = self._genai_types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=MAX_TOKENS,
         )
@@ -245,7 +247,7 @@ class GeminiLLM(BaseLLM):
 
 
 def create_llm() -> BaseLLM:
-    """Фабричный метод: создание LLM-клиента по настройке PROVIDER."""
+    """Factory: create an LLM client according to the PROVIDER setting."""
     provider = PROVIDER
 
     if provider == "openai":

@@ -1,13 +1,13 @@
 """
-Парсеры ответов LLM.
+LLM response parsers.
 
-Содержит парсеры для извлечения структурированных данных из ответов LLM:
-- TaggedTextParser — извлечение блоков из <START>/<END> тегов
-- MarkdownParser — извлечение code-блоков, нормализация текста
-- SectionParser — разбор секций, нумерованных списков, приоритетов
-- VariantParser — разбор вариантов промптов
-- GradientParser — разбор текстовых градиентов
-- ClusterParser — разбор кластеров ошибок
+Parsers for extracting structured data from LLM responses:
+- TaggedTextParser  — extract blocks from <START>/<END> tags
+- MarkdownParser    — extract code blocks, normalize text
+- SectionParser     — parse sections, numbered lists, priorities
+- VariantParser     — parse prompt variants
+- GradientParser    — parse textual gradients
+- ClusterParser     — parse error clusters
 """
 
 import re
@@ -53,17 +53,17 @@ LEADING_META_PREFIX_RE = re.compile(
 
 
 class TaggedTextParser:
-    """Парсер текста с тегами <START>/<END>.
+    """Parser for <START>/<END>-tagged text blocks.
 
-    Извлекает текстовые блоки из ответов LLM.
-    Используется для gradient feedbacks и новых промптов.
+    Extracts text blocks from LLM responses.
+    Used for gradient feedbacks and new prompt candidates.
     """
 
     @staticmethod
     def parse_tagged_text(
         text: str, start_tag: str = "<START>", end_tag: str = "<END>"
     ) -> list:
-        """Извлечение всех текстовых блоков между start_tag и end_tag."""
+        """Extract all text blocks between start_tag and end_tag."""
         texts = []
         while True:
             start_index = text.find(start_tag)
@@ -79,11 +79,11 @@ class TaggedTextParser:
 
 
 class MarkdownParser:
-    """Парсер Markdown-блоков: извлечение code-блоков и нормализация текста промптов."""
+    """Markdown block parser: extract code blocks and normalize prompt text."""
 
     @staticmethod
     def extract_code_blocks(text: str) -> List[str]:
-        """Извлечение содержимого из ``` code-блоков."""
+        """Extract content from ``` code blocks."""
         return [
             block.strip()
             for block in CODE_BLOCK_RE.findall(text)
@@ -92,12 +92,12 @@ class MarkdownParser:
 
     @staticmethod
     def strip_code_fences(text: str) -> str:
-        """Удаление ``` обёрток вокруг текста."""
+        """Remove ``` wrappers around text."""
         return CODE_FENCE_STRIP_RE.sub("", text).strip()
 
     @staticmethod
     def normalize_prompt_text(text: str) -> str:
-        """Нормализация текста промпта: удаление code-fence, мета-префиксов."""
+        """Normalize prompt text: strip code fences and meta-prefixes."""
         cleaned = text.strip()
         code_blocks = MarkdownParser.extract_code_blocks(cleaned)
         if code_blocks:
@@ -115,19 +115,19 @@ class MarkdownParser:
 
     @staticmethod
     def assert_no_meta_prefix(text: str) -> None:
-        """Проверка, что текст не начинается с запрещённого мета-префикса."""
+        """Assert that the text does not start with a forbidden meta-prefix."""
         if LEADING_META_PREFIX_RE.match(text.strip()):
             raise ValueError("Prompt text starts with forbidden meta prefix")
 
 
 class SectionParser:
-    """Парсер секций: разделение по маркерам, нумерованные списки, приоритеты."""
+    """Section parser: split by markers, extract numbered lists and priority scores."""
 
     @staticmethod
     def split_by_markers(
         text: str, markers: List[str], case_sensitive: bool = False
     ) -> Dict[str, str]:
-        """Разбиение текста на секции по маркерам (например, '## ERROR ANALYSIS')."""
+        """Split text into sections by markers (e.g. '## ERROR ANALYSIS')."""
         flags = 0 if case_sensitive else re.IGNORECASE
         found = []
 
@@ -148,7 +148,7 @@ class SectionParser:
 
     @staticmethod
     def extract_numbered_list(text: str) -> List[str]:
-        """Извлечение нумерованного/маркированного списка из текста."""
+        """Extract a numbered or bulleted list of items from text."""
         items: List[str] = []
         current: Optional[str] = None
 
@@ -169,7 +169,7 @@ class SectionParser:
 
     @staticmethod
     def extract_priority(text: str) -> float:
-        """Извлечение значения приоритета (0.0–1.0) из текста."""
+        """Extract a priority value (0.0–1.0) from text."""
         for value in PRIORITY_RE.findall(text):
             try:
                 score = float(value)
@@ -181,11 +181,11 @@ class SectionParser:
 
 
 class VariantParser:
-    """Парсер вариантов промптов: разделение на блоки, извлечение текста и описания."""
+    """Prompt-variant parser: split response into blocks, extract prompt text and description."""
 
     @staticmethod
     def split_variant_blocks(response_text: str) -> List[str]:
-        """Разделение ответа на блоки 'VARIANT N:'."""
+        """Split a response into 'VARIANT N:' blocks."""
         if VARIANT_SPLIT_RE.search(response_text):
             parts = VARIANT_SPLIT_RE.split(response_text)
             blocks = [b for b in parts[1:] if b and b.strip()]
@@ -194,7 +194,7 @@ class VariantParser:
 
     @staticmethod
     def extract_prompt(block: str) -> Optional[str]:
-        """Извлечение текста промпта из блока варианта."""
+        """Extract the prompt text from a variant block."""
         match = PROMPT_BLOCK_RE.search(block)
         if match:
             return MarkdownParser.normalize_prompt_text(match.group(1))
@@ -210,7 +210,7 @@ class VariantParser:
 
     @staticmethod
     def extract_description(block: str) -> str:
-        """Извлечение описания изменений из блока 'CHANGES MADE:'."""
+        """Extract the change description from a 'CHANGES MADE:' block."""
         match = CHANGES_RE.search(block)
         return match.group(1).strip() if match else "Edited based on gradient"
 
@@ -221,7 +221,7 @@ class VariantParser:
         gradient: TextGradient,
         parent_node: Optional[PromptNode],
     ) -> List[PromptNode]:
-        """Парсинг всех вариантов промптов из ответа LLM в список PromptNode."""
+        """Parse all prompt variants from an LLM response into a list of PromptNode objects."""
         nodes: List[PromptNode] = []
         variant_blocks = VariantParser.split_variant_blocks(response_text)
         for block in variant_blocks:
@@ -240,7 +240,7 @@ class VariantParser:
         gradient: TextGradient,
         parent_node: Optional[PromptNode],
     ) -> Optional[PromptNode]:
-        """Парсинг одного блока варианта в PromptNode."""
+        """Parse a single variant block into a PromptNode."""
         new_prompt = VariantParser.extract_prompt(block)
         if not new_prompt:
             new_prompt = block
@@ -270,7 +270,7 @@ class VariantParser:
 
 
 class GradientParser:
-    """Парсер текстовых градиентов: извлечение структурированных градиентов из ответа LLM."""
+    """Text-gradient parser: extract structured gradients from an LLM response."""
 
     @staticmethod
     def parse_gradient_response(
@@ -280,7 +280,7 @@ class GradientParser:
         batch_index: int = None,
         cluster_name: str = None,
     ) -> TextGradient:
-        """Парсинг одного градиента из секций ERROR ANALYSIS, SUGGESTED DIRECTION и др."""
+        """Parse a single gradient from ERROR ANALYSIS, SUGGESTED DIRECTION, and related sections."""
         sections = SectionParser.split_by_markers(response_text, SECTION_MARKERS)
         error_analysis = (
             sections.get("## ERROR ANALYSIS", "").strip()
@@ -318,7 +318,7 @@ class GradientParser:
     def _detect_cluster_name(
         block_text: str, cluster_names: List[str]
     ) -> Optional[str]:
-        """Определение имени кластера в блоке текста."""
+        """Detect the cluster name referenced in a text block."""
         for name in cluster_names:
             if name.lower() in block_text.lower():
                 return name
@@ -331,7 +331,7 @@ class GradientParser:
         cluster_names: List[str],
         success_examples: List[Example],
     ) -> List[TextGradient]:
-        """Парсинг нескольких градиентов из батчевого ответа (разделённых ### GRADIENT)."""
+        """Parse multiple gradients from a batched response separated by '### GRADIENT' markers."""
         gradients: List[TextGradient] = []
         blocks = GRADIENT_SPLIT_RE.findall(response_text)
 
@@ -362,13 +362,13 @@ class GradientParser:
 
 
 class ClusterParser:
-    """Парсер кластеров ошибок: группировка failure-примеров по категориям."""
+    """Error-cluster parser: group failure examples into named categories."""
 
     @staticmethod
     def parse_clusters(
         response_text: str, failure_examples: List[Example]
     ) -> Dict[str, List[Example]]:
-        """Разбор текста с категориями и номерами примеров в словарь кластеров."""
+        """Parse category names and example indices from text into a cluster dictionary."""
         clusters: Dict[str, List[Example]] = defaultdict(list)
         current_category: Optional[str] = None
 

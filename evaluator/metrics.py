@@ -1,59 +1,37 @@
 """
-Метрики оценки качества промптов.
+Prompt quality evaluation metrics.
 
-Содержит реализации метрик для разных задач:
-- ExactMatch, TokenF1 — для QA (SQuAD)
-- NumericExactMatch — для числовых задач (GSM8K)
-- ROUGE-L, METEOR, BERTScore — для задач генерации (XSUM, CommonGen)
+Implementations for various task types:
+- ExactMatch, TokenF1        — for QA tasks (SQuAD)
+- NumericExactMatch          — for numeric tasks (GSM8K)
+- ROUGE-L, METEOR, BERTScore — for generation tasks (XSum, CommonGen)
 
-Все метрики наследуют CheapMetric
-и регистрируются в METRIC_REGISTRY.
+All metrics inherit CheapMetric and are registered in METRIC_REGISTRY.
 """
 
 from typing import List, Dict
 from abc import ABC, abstractmethod
 from collections import Counter
-import re
-import string
 
 from nltk.translate.meteor_score import meteor_score as _nltk_meteor
 
-from data_structures import Example
-
-
-def normalize_answer(s: str) -> str:
-    """Нормализация ответа: нижний регистр, удаление артиклей, пунктуации и лишних пробелов."""
-    def remove_articles(text):
-        regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
-        return re.sub(regex, " ", text)
-
-    def white_space_fix(text):
-        return " ".join(text.split())
-
-    def remove_punc(text):
-        exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
-
-    def lower(text):
-        return text.lower()
-
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+from data_structures import Example, normalize_answer, extract_final_number, NO_ANSWER_VARIANTS
 
 
 def get_tokens(s: str) -> List[str]:
-    """Токенизация нормализованного текста."""
+    """Tokenize a normalized string."""
     if not s:
         return []
     return normalize_answer(s).split()
 
 
 def compute_exact(a_gold: str, a_pred: str) -> int:
-    """Точное совпадение нормализованных ответов (0 или 1)."""
+    """Exact match of two normalized answers (0 or 1)."""
     return int(normalize_answer(a_gold) == normalize_answer(a_pred))
 
 
 def compute_f1(a_gold: str, a_pred: str) -> float:
-    """Токен-F1 между эталонным и предсказанным ответами."""
+    """Token-F1 between gold and predicted answers."""
     gold_toks = get_tokens(a_gold)
     pred_toks = get_tokens(a_pred)
     common = Counter(gold_toks) & Counter(pred_toks)
@@ -69,11 +47,11 @@ def compute_f1(a_gold: str, a_pred: str) -> float:
     return f1
 
 
-_NO_ANSWER_VARIANTS: List[str] = ["", "no answer", "no answer."]
+_NO_ANSWER_VARIANTS = NO_ANSWER_VARIANTS
 
 
 def _get_gold_answers(ex: Example) -> List[str]:
-    """Получение списка эталонных ответов из метаданных или expected_output."""
+    """Return the list of valid gold answers from metadata or expected_output."""
     all_ans = ex.metadata.get("all_answers") if ex.metadata else None
     if all_ans is not None:
         # Filter out empty-after-normalization, keep unique
@@ -90,7 +68,7 @@ def _get_gold_answers(ex: Example) -> List[str]:
 
 
 class MetricEvaluator(ABC):
-    """Базовый класс метрики оценки промптов."""
+    """Abstract base class for prompt evaluation metrics."""
 
     name: str
 
@@ -98,23 +76,23 @@ class MetricEvaluator(ABC):
         pass
 
     def supports_examples(self, examples: List[Example]) -> bool:
-        """Поддерживает ли метрика данный набор примеров."""
+        """Return True if this metric supports the given example set."""
         return True
 
     @abstractmethod
     def evaluate(self, prompt: str, examples: List[Example]) -> float:
-        """Возвращает оценку промпта от 0.0 до 1.0"""
+        """Return a prompt score from 0.0 to 1.0."""
         pass
 
 
 class CheapMetric(MetricEvaluator):
-    """Метрика без LLM-вызовов — чистое текстовое сравнение."""
+    """A metric that requires no LLM calls — pure text comparison."""
 
     pass
 
 
 class ExactMatchMetric(CheapMetric):
-    """Метрика точного совпадения (Exact Match) для QA-задач."""
+    """Exact-match metric for QA tasks."""
 
     name = "exact_match"
 
@@ -133,7 +111,7 @@ class ExactMatchMetric(CheapMetric):
 
 
 class TokenF1Metric(CheapMetric):
-    """Метрика Token-F1 для QA-задач."""
+    """Token-F1 metric for QA tasks."""
 
     name = "token_f1"
 
@@ -152,7 +130,7 @@ class TokenF1Metric(CheapMetric):
 
 
 class RougeLMetric(CheapMetric):
-    """Метрика ROUGE-L F1 для задач генерации текста."""
+    """ROUGE-L F1 metric for text generation tasks."""
 
     name = "rouge_l"
 
@@ -190,7 +168,7 @@ class RougeLMetric(CheapMetric):
 
 
 class MeteorMetric(CheapMetric):
-    """Метрика METEOR для задач генерации текста."""
+    """METEOR metric for text generation tasks."""
 
     name = "meteor"
 
@@ -224,36 +202,9 @@ class MeteorMetric(CheapMetric):
         return sum(scores) / len(scores) if scores else 0.0
 
 
-def _extract_final_number(text: str) -> str:
-    """Извлечение финального числового ответа из текста рассуждения модели."""
-    if text is None:
-        return ""
-    text = text.strip()
-    # 1. #### marker
-    m = re.search(r"####\s*(.+)", text)
-    if m:
-        return m.group(1).strip().replace(",", "")
-    # 2. "The answer is <number>" / "answer: <number>" patterns
-    m = re.search(
-        r"(?:the\s+)?(?:final\s+)?answer\s*(?:is|:|=)\s*\$?\s*(-?[\d,]+\.?\d*)",
-        text,
-        re.IGNORECASE,
-    )
-    if m:
-        return m.group(1).replace(",", "")
-    # 3. "= <number>" at the end of a line
-    m = re.search(r"=\s*\$?\s*(-?[\d,]+\.?\d*)\s*$", text, re.MULTILINE)
-    if m:
-        return m.group(1).replace(",", "")
-    # 4. Last number in the text
-    numbers = re.findall(r"-?[\d,]+\.?\d*", text)
-    if numbers:
-        return numbers[-1].replace(",", "")
-    return normalize_answer(text)
-
 
 class NumericExactMatchMetric(CheapMetric):
-    """Точное совпадение извлечённых числовых ответов"""
+    """Exact match on extracted numeric answers."""
 
     name = "numeric_exact_match"
 
@@ -266,10 +217,10 @@ class NumericExactMatchMetric(CheapMetric):
                 scores.append(0.0)
                 continue
             gold_answers = _get_gold_answers(ex)
-            pred = _extract_final_number(ex.actual_output)
+            pred = extract_final_number(ex.actual_output)
             em = max(
                 int(
-                    normalize_answer(_extract_final_number(g)) == normalize_answer(pred)
+                    normalize_answer(extract_final_number(g)) == normalize_answer(pred)
                 )
                 for g in gold_answers
             )
@@ -278,7 +229,7 @@ class NumericExactMatchMetric(CheapMetric):
 
 
 class BertScoreMetric(CheapMetric):
-    """Метрика BERTScore F1 — семантическое сходство на основе BERT-эмбеддингов."""
+    """BERTScore F1 metric — semantic similarity based on BERT embeddings."""
 
     name = "bertscore"
 

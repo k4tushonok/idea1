@@ -1,16 +1,17 @@
 """
-Иерархический оптимизатор промптов.
+Hierarchical prompt optimizer.
 
-Оркестрирует локальную и глобальную оптимизацию в едином цикле
-поколений с early stopping. Локальный оптимизатор улучшает
-промпты через текстовые градиенты, глобальный — через
-мета-анализ истории.
+Orchestrates local and global optimization in a unified
+generation loop with early stopping. The local optimizer
+improves prompts via textual gradients; the global optimizer
+proposes structurally novel candidates via meta-analysis of history.
 """
 
 from typing import List, Dict, Optional
 import time
 import json
 import os
+import traceback
 from data_structures import Example, PromptNode, OptimizationSource
 from history_manager import HistoryManager
 from evaluator.scorer import PromptScorer
@@ -30,11 +31,11 @@ from config import MAX_GENERATIONS, MIN_IMPROVEMENT, PATIENCE, TOP_BEST_NODES
 
 
 class HierarchicalOptimizer:
-    """Главный оркестратор оптимизации промптов.
+    """Main prompt optimization orchestrator.
 
-    Управляет циклом поколений, чередуя локальную оптимизацию
-    (градиенты + редактирование) и глобальную (мета-оптимизация).
-    Поддерживает early stopping, сохранение результатов и отчётность.
+    Manages the generation loop, alternating local optimization
+    (gradients + editing) with global meta-optimization.
+    Supports early stopping, result persistence and reporting.
     """
 
     def __init__(self, metrics_config=None, task_description: str = ""):
@@ -61,7 +62,7 @@ class HierarchicalOptimizer:
             task_description=task_description,
         )
 
-        # Метаданные оптимизации
+        # Optimization metadata
         self.start_time = None
         self.end_time = None
         self.best_node = None
@@ -75,20 +76,20 @@ class HierarchicalOptimizer:
         test_examples: Optional[List[Example]] = None,
         save_dir: Optional[str] = None,
     ) -> PromptNode:
-        """Запуск полного цикла оптимизации промпта.
+        """Run the full prompt optimization loop.
 
-        Принимает начальный промпт и итеративно улучшает его,
-        чередуя локальную и глобальную фазы. Возвращает
-        лучший найденный PromptNode.
+        Accepts an initial prompt and iteratively improves it,
+        alternating local and global phases. Returns the best
+        PromptNode found.
         """
         self.start_time = time.time()
 
-        # Создаем начальный узел
+        # Create the initial node
         initial_node = PromptNode(
             prompt_text=initial_prompt, generation=0, source=OptimizationSource.INITIAL
         )
 
-        # Оцениваем начальный промпт
+        # Evaluate the initial prompt
         print("Evaluating initial prompt...")
         if is_enabled():
             print(
@@ -108,17 +109,17 @@ class HierarchicalOptimizer:
             print(f"  {name}: {value:.3f}")
         print()
 
-        # Добавляем в историю
+        # Add to history
         self.history.add_node(initial_node)
 
         self.best_node = initial_node
         best_score = initial_score
 
-        # Отслеживание для early stopping
+        # Tracking for early stopping
         generations_without_improvement = 0
         generation = 0
 
-        # Основной цикл оптимизации
+        # Main optimization loop
         for generation in range(1, MAX_GENERATIONS + 1):
             print("\n" + "=" * 80)
             print(f"GENERATION {generation}/{MAX_GENERATIONS}")
@@ -129,7 +130,7 @@ class HierarchicalOptimizer:
 
             self.scorer.clear_eval_cache()
 
-            # ЛОКАЛЬНАЯ ОПТИМИЗАЦИЯ
+            # LOCAL OPTIMIZATION
 
             print(f"Phase 1: Local Optimization")
             if is_enabled():
@@ -170,7 +171,7 @@ class HierarchicalOptimizer:
                 print(f"  Error in local optimization: {e}")
                 new_candidates.append(self.best_node)
 
-            # ГЛОБАЛЬНАЯ ОПТИМИЗАЦИЯ (если триггер сработал)
+            # GLOBAL OPTIMIZATION (if triggered)
 
             if self.global_optimizer.should_trigger_global_step(
                 generation, generations_without_improvement
@@ -192,15 +193,13 @@ class HierarchicalOptimizer:
                         print("  Global optimization returned no candidates")
 
                 except Exception as e:
-                    import traceback
-
                     print(f"Error in global optimization: {e}")
                     traceback.print_exc()
 
             else:
                 print(f"\nPhase 2: Global Optimization (Skipped)")
 
-            # ОБНОВЛЕНИЕ ЛУЧШЕГО
+            # UPDATE BEST NODE
 
             print(f"\nPhase 3: Best Node Update")
 
@@ -224,7 +223,7 @@ class HierarchicalOptimizer:
                     f"all new_candidates gen={generation}", new_candidates
                 )
 
-            # Проверяем улучшение
+            # Check for improvement
             improvement = generation_best_score - best_score
 
             if improvement + 1e-8 >= MIN_IMPROVEMENT:
@@ -237,7 +236,7 @@ class HierarchicalOptimizer:
                 print(f"  ✗ No significant improvement")
                 generations_without_improvement += 1
 
-            # Логирование
+            # Log entry
             generation_time = time.time() - generation_start_time
             log_entry = {
                 "generation": generation,
@@ -263,7 +262,7 @@ class HierarchicalOptimizer:
                 print(f"{'='*80}\n")
                 break
 
-        # ФИНАЛИЗАЦИЯ
+        # FINALIZATION
 
         self.end_time = time.time()
         total_time = self.end_time - self.start_time
@@ -275,7 +274,7 @@ class HierarchicalOptimizer:
         print(f"  Initial score: {initial_score:.3f}")
         print(f"  Final score (sampled): {best_score:.3f}")
 
-        # Переоценка лучшего промпта на полном валидационном наборе
+        # Re-evaluate best prompt on full validation set
         print(
             f"\n  Re-evaluating best prompt on full validation ({len(validation_examples)} examples)..."
         )
@@ -299,7 +298,7 @@ class HierarchicalOptimizer:
         print(f"  Total time: {total_time:.2f}s")
         print(f"  Generations: {generation}")
 
-        # Сохранение результатов
+        # Save results
         if save_dir:
             self._save_final_results(save_dir, test_examples)
 
@@ -308,15 +307,15 @@ class HierarchicalOptimizer:
         return self.best_node
 
     def get_optimization_report(self) -> Dict:
-        """Формирование полного отчёта об оптимизации.
+        """Build a full optimization report.
 
-        Включает: временные метки, результаты, историю,
-        статистику компонентов, траекторию лучшего узла.
+        Includes: timestamps, results, history,
+        component statistics, best node lineage.
         """
         if not self.best_node:
             return {"error": "Optimization not run yet"}
 
-        # Базовая информация
+        # Basic information
         report = {
             "optimization_info": {
                 "start_time": self.start_time,
@@ -326,7 +325,7 @@ class HierarchicalOptimizer:
                 ),
                 "generations": len(self.optimization_log),
             },
-            # Результаты
+            # Results
             "results": {
                 "best_score": self.best_node.metadata.get(
                     "full_validation_score", self.best_node.metrics.composite_score()
@@ -342,15 +341,15 @@ class HierarchicalOptimizer:
                 "best_prompt": self.best_node.prompt_text,
                 "best_node_id": self.best_node.id,
             },
-            # История оптимизации
+            # Optimization history
             "optimization_log": self.optimization_log,
-            # Статистика компонентов
+            # Component statistics
             "component_statistics": {
                 "history": self.history.get_statistics(),
                 "local_optimizer": self.local_optimizer.get_statistics(),
                 "global_optimizer": self.global_optimizer.get_statistics(),
             },
-            # Траектория лучшего узла
+            # Best node lineage
             "best_node_lineage": [
                 {
                     "id": node.id,
@@ -362,7 +361,7 @@ class HierarchicalOptimizer:
                 }
                 for node in self.history.get_lineage(self.best_node.id)
             ],
-            # Успешные стратегии
+            # Best global strategies
             "best_global_strategies": self.global_optimizer.get_best_strategies(
                 top_k=TOP_BEST_NODES
             ),
@@ -371,7 +370,7 @@ class HierarchicalOptimizer:
         return report
 
     def visualize_optimization_trajectory(self) -> str:
-        """Создание текстовой ASCII-визуализации траектории оптимизации"""
+        """Build a text ASCII visualisation of the optimization trajectory."""
         if not self.optimization_log:
             return "No optimization data available"
 
@@ -379,7 +378,7 @@ class HierarchicalOptimizer:
         viz += "OPTIMIZATION TRAJECTORY\n"
         viz += "=" * 80 + "\n\n"
 
-        # График прогресса
+        # Progress chart
         viz += "Generation | Best Score | Overall Best | Improvement\n"
         viz += "-" * 60 + "\n"
 
@@ -389,7 +388,7 @@ class HierarchicalOptimizer:
             overall_best = entry["overall_best"]
             improvement = entry.get("improvement", 0)
 
-            # Простой ASCII bar для визуализации
+            # Simple ASCII bar
             bar_length = int(gen_best * 50)
             bar = "█" * bar_length
 
@@ -403,25 +402,25 @@ class HierarchicalOptimizer:
     def _save_final_results(
         self, save_dir: str, test_examples: Optional[List[Example]] = None
     ):
-        """Сохранение финальных результатов: история, отчёт, лучший промпт, траектория"""
+        """Save final results: history, report, best prompt, trajectory."""
         os.makedirs(save_dir, exist_ok=True)
 
-        # 1. Сохраняем историю
+        # 1. Save history
         history_path = os.path.join(save_dir, "optimization_history.json")
         self.history.save(history_path)
 
-        # 2. Сохраняем отчет
+        # 2. Save report
         report = self.get_optimization_report()
         report_path = os.path.join(save_dir, "optimization_report.json")
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
 
-        # 3. Сохраняем лучший промпт
+        # 3. Save best prompt
         best_prompt_path = os.path.join(save_dir, "best_prompt.txt")
         with open(best_prompt_path, "w", encoding="utf-8") as f:
             f.write(self.best_node.prompt_text)
 
-        # 4. Сохраняем траекторию
+        # 4. Save trajectory
         trajectory_path = os.path.join(save_dir, "trajectory.txt")
         with open(trajectory_path, "w", encoding="utf-8") as f:
             f.write(self.visualize_optimization_trajectory())
@@ -435,13 +434,13 @@ class HierarchicalOptimizer:
     def compare_with_baseline(
         self, baseline_prompt: str, test_examples: List[Example]
     ) -> Dict:
-        """Сравнение оптимизированного промпта с baseline"""
+        """Compare the optimized prompt against a baseline."""
         if not self.best_node:
             raise ValueError("Optimization not run yet")
 
         print("\nComparing with baseline...")
 
-        # Оцениваем baseline
+        # Evaluate baseline
         baseline_metrics = self.scorer.evaluate_prompt(
             baseline_prompt,
             test_examples,
@@ -449,7 +448,7 @@ class HierarchicalOptimizer:
             stage=1,
         )
 
-        # Оцениваем оптимизированный
+        # Evaluate optimized prompt
         optimized_metrics = self.scorer.evaluate_prompt(
             self.best_node.prompt_text,
             test_examples,

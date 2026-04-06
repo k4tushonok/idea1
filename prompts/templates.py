@@ -1,9 +1,9 @@
 """
-Шаблоны промптов для системы оптимизации.
+Prompt templates for the optimization system.
 
-Предоставляет методы для построения промптов анализа (градиенты),
-редактирования, генерации синонимов и мета-оптимизации.
-Шаблоны загружаются из .txt-файлов в папке prompts/.
+Provides methods for building analysis prompts (gradients),
+editing prompts, synonym generation, and meta-optimization.
+Templates are loaded from .txt files in the prompts/ directory.
 """
 
 from pathlib import Path
@@ -17,11 +17,11 @@ DEFAULT_TASK_DESCRIPTION = "a general language task"
 
 
 class Templates:
-    """Статический класс-хелпер для построения промптов из шаблонов"""
+    """Static helper class for building prompts from templates."""
 
     @staticmethod
     def load_template(name: str) -> str:
-        """Загрузка шаблона из файла prompts/<name>.txt."""
+        """Load a template from prompts/<name>.txt."""
         path = TEMPLATES_DIR / f"{name}.txt"
         if not path.exists():
             raise FileNotFoundError(f"Template not found: {path}")
@@ -34,7 +34,7 @@ class Templates:
         include_expected: bool = True,
         truncate_input: int = 300,
     ) -> str:
-        """Форматирование списка примеров в текстовый блок с усечением"""
+        """Format a list of examples as a text block with optional truncation."""
         block = ""
         for i, example in enumerate(examples[:max_count], 1):
             input_text = example.input_text
@@ -51,7 +51,7 @@ class Templates:
 
     @staticmethod
     def format_error_string(failure_examples: List[Example]) -> str:
-        """Форматирование ошибок в текстовый блок с номерами примеров"""
+        """Format failure examples as a numbered text block."""
         error_string = ""
         for idx, ex in enumerate(failure_examples):
             error_string += f"## Example {idx + 1}\n"
@@ -69,7 +69,7 @@ class Templates:
         num_feedbacks: int = 5,
         task_description: str = "",
     ) -> str:
-        """Построение промпта для анализа ошибок и получения текстовых градиентов"""
+        """Build an error-analysis prompt to obtain textual gradients."""
         template = Templates.load_template("analysis")
         return template.format(
             current_prompt=current_prompt,
@@ -85,7 +85,7 @@ class Templates:
         num_variants: int,
         task_description: str = "",
     ) -> str:
-        """Построение промпта для применения градиента (новые промпты в <START>/<END>)"""
+        """Build a gradient-application prompt (new prompts returned in <START>/<END> tags)."""
         template = Templates.load_template("editing")
         return template.format(
             current_prompt=current_prompt,
@@ -97,13 +97,13 @@ class Templates:
 
     @staticmethod
     def build_synonym_prompt(prompt_text: str) -> str:
-        """Построение промпта для генерации парафразы промпта"""
+        """Build a prompt for generating a paraphrase of the given prompt."""
         template = Templates.load_template("synonym")
         return template.format(prompt_text=prompt_text)
 
     @staticmethod
     def _bucketize_float(num: float, n_buckets: int = 100) -> int:
-        """Квантование float-значения [0,1] в целочисленный бакет"""
+        """Quantise a float value in [0, 1] to an integer bucket."""
         num = max(0.0, min(1.0, num))
         return round(num * n_buckets)
 
@@ -115,10 +115,10 @@ class Templates:
         task_description: str = "",
         num_score_buckets: int = 100,
     ) -> str:
-        """Построение мета-промпта для глобальной оптимизации.
+        """Build the meta-optimizer prompt for global optimization.
 
-        Включает историю узлов с квантованными оценками
-        и опциональные QA-exemplars
+        Includes node history with quantised scores
+        and optional QA exemplars.
         """
         sorted_nodes = sorted(history_nodes, key=lambda n: n.selection_score())
 

@@ -1,9 +1,9 @@
 """
-Оценщик промптов.
+Prompt scorer.
 
-Выполняет промпты на примерах (единично и батчами),
-вычисляет метрики, кеширует результаты и разделяет
-примеры на успехи/провалы для дальнейшего анализа.
+Executes prompts on examples (individually and in batches),
+computes metrics, caches results, and splits examples into
+successes and failures for further analysis.
 """
 
 from typing import List, Dict, Optional, Tuple
@@ -12,6 +12,7 @@ import statistics
 import random
 import json
 import hashlib
+import time
 from tqdm import tqdm
 
 from evaluator.metrics import MetricEvaluator, METRIC_REGISTRY
@@ -29,22 +30,30 @@ from config import (
     METRICS_CONFIG,
     MAX_EXAMPLES_PER_NODE,
     BATCH_EVAL_SIZE,
+    EVAL_TEMPERATURE,
+    EVAL_SEED,
 )
 
-_EVAL_TEMPERATURE: float = 0.1
+def _iter_chunks(lst: list, n: int):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i : i + n]
+
+
+
 
 
 class PromptScorer:
-    """Оценщик промптов: выполнение, метрики, кеширование.
+    """Prompt scorer: execution, metrics, and caching.
 
-    Поддерживает батчевое выполнение, многостадийные метрики,
-    кеш оценок и попарные расстояния для дедупликации.
+    Supports batched execution, multi-stage metrics,
+    an evaluation cache, and pairwise distances for deduplication.
     """
 
     def __init__(self, llm: BaseLLM, metrics_config: Optional[List[Dict]] = None):
         self.llm = llm
         self.max_examples_per_node = MAX_EXAMPLES_PER_NODE
-        self.seed = 42
+        self.seed = EVAL_SEED
 
         self._metrics_config: List[Dict] = metrics_config or METRICS_CONFIG
 
@@ -78,21 +87,21 @@ class PromptScorer:
 
     @staticmethod
     def _hash_examples(examples: List[Example]) -> str:
-        """Быстрый хеш набора примеров по input_text для идентификации батча"""
+        """Fast hash of an example set based on input_text, used to identify a batch."""
         h = hashlib.md5()
         for ex in examples:
             h.update(ex.input_text[:200].encode("utf-8"))
         return h.hexdigest()
 
     def clear_eval_cache(self):
-        """Очистка кешей evaluate_prompt и edit_distance (между поколениями)"""
+        """Clear evaluation and edit-distance caches (called between generations)."""
         self._eval_cache.clear()
         self._edit_distance_cache.clear()
 
     def _sample_examples(
         self, examples: List[Example], seed_offset: int = 0
     ) -> List[Example]:
-        """Семплирование подмножества примеров для оценки"""
+        """Sample a subset of examples for evaluation."""
         if len(examples) <= self.max_examples_per_node:
             return examples
         rnd = random.Random(self.seed + seed_offset)
@@ -101,7 +110,7 @@ class PromptScorer:
     def execute_prompt_batch(
         self, prompt: str, examples: List[Example], progress_bar: bool = False
     ) -> List[Example]:
-        """Выполнение промпта батчами на массиве примеров"""
+        """Execute a prompt on an array of examples using batch LLM calls."""
         if len(examples) <= 1:
             if is_enabled():
                 print(f"[diag] execute_prompt_batch: single example mode")
@@ -109,16 +118,12 @@ class PromptScorer:
                 ex.actual_output = self.execute_prompt(
                     prompt,
                     ex.input_text,
-                    temperature=_EVAL_TEMPERATURE,
+                    temperature=EVAL_TEMPERATURE,
                 )
             return examples
 
-        def chunks(lst, n):
-            for i in range(0, len(lst), n):
-                yield lst[i : i + n]
-
         total = len(examples)
-        batch_list = list(chunks(examples, BATCH_EVAL_SIZE))
+        batch_list = list(_iter_chunks(examples, BATCH_EVAL_SIZE))
         n_batches = len(batch_list)
         calls_before = llm_calls(self.llm)
 
@@ -136,7 +141,7 @@ class PromptScorer:
             try:
                 raw = self.llm.invoke(
                     prompt=batch_prompt,
-                    temperature=_EVAL_TEMPERATURE,
+                    temperature=EVAL_TEMPERATURE,
                 )
                 parsed = self._parse_batch_response(raw, len(batch))
             except Exception as e:
@@ -171,7 +176,7 @@ class PromptScorer:
                     batch[idx].actual_output = self.execute_prompt(
                         prompt,
                         batch[idx].input_text,
-                        temperature=_EVAL_TEMPERATURE,
+                        temperature=EVAL_TEMPERATURE,
                     )
                 done += len(batch)
                 continue
@@ -189,7 +194,7 @@ class PromptScorer:
                     ex.actual_output = self.execute_prompt(
                         prompt,
                         ex.input_text,
-                        temperature=_EVAL_TEMPERATURE,
+                        temperature=EVAL_TEMPERATURE,
                     )
             else:
                 print(f"Falling back to single execution for {len(batch)} examples")
@@ -197,7 +202,7 @@ class PromptScorer:
                     ex.actual_output = self.execute_prompt(
                         prompt,
                         ex.input_text,
-                        temperature=_EVAL_TEMPERATURE,
+                        temperature=EVAL_TEMPERATURE,
                     )
             done += len(batch)
 
@@ -211,7 +216,7 @@ class PromptScorer:
         return examples
 
     def _build_batch_prompt(self, prompt: str, examples: List[Example]) -> str:
-        """Построение батчевого промпта для одновременной обработки нескольких примеров."""
+        """Build a batched prompt for simultaneous processing of multiple examples."""
         header = (
             "You must emulate multiple completely independent assistant calls.\n"
             "Each item below is a separate fresh interaction with no shared memory.\n"
@@ -237,7 +242,7 @@ class PromptScorer:
     def _parse_batch_response(
         self, response_text: str, n_expected: int
     ) -> Optional[List[str]]:
-        """Парсинг JSON-ответа батчевого выполнения в список ответов."""
+        """Parse the JSON response from a batch execution into a list of answers."""
         try:
             start = response_text.find("[")
             end = response_text.rfind("]") + 1
@@ -281,10 +286,10 @@ class PromptScorer:
     def execute_prompt(
         self, prompt: str, input_text: str, temperature: Optional[float] = None
     ) -> str:
-        """Выполнение промпта на одном примере"""
+        """Execute a prompt on a single example input."""
         full_prompt = f"{prompt}\n\nInput:\n{input_text}"
         effective_temperature = (
-            _EVAL_TEMPERATURE if temperature is None else temperature
+            EVAL_TEMPERATURE if temperature is None else temperature
         )
         return self.llm.invoke(prompt=full_prompt, temperature=effective_temperature)
 
@@ -297,15 +302,13 @@ class PromptScorer:
         seed_offset: int = 0,
         stage: int = 2,
     ) -> Metrics:
-        """Оценка промпта: выполнение + вычисление всех активных метрик.
+        """Evaluate a prompt: execute it on examples and compute all active metrics.
 
-        Поддерживает кеширование, семплирование примеров,
-        многостадийные метрики с нормализацией весов.
+        Supports caching, example sampling, and multi-stage metrics
+        with weight normalization.
         """
         _calls_start = llm_calls(self.llm)
-        import time as _t
-
-        _t0 = _t.time()
+        _t0 = time.time()
 
         if is_enabled():
             will_use = (
@@ -388,9 +391,9 @@ class PromptScorer:
             active_metric_names.add(name)
 
         for name, instance, cfg in metrics_to_eval:
-            _m_t0 = _t.time()
+            _m_t0 = time.time()
             score = instance.evaluate(prompt=prompt, examples=eval_examples)
-            _m_elapsed = _t.time() - _m_t0
+            _m_elapsed = time.time() - _m_t0
             metrics.metrics[name] = float(score)
             if is_enabled():
                 _m_calls = llm_calls(self.llm)
@@ -400,7 +403,7 @@ class PromptScorer:
                     f"time={_m_elapsed:.2f}s llm_calls={_m_calls})"
                 )
 
-        # Нормализация весов, чтобы composite ∈ [0, 1] на любом stage
+        # Normalise weights so composite ∈ [0, 1] for any stage
         active_weights = {
             m["name"]: m["weight"]
             for m in self._metrics_config
@@ -413,7 +416,7 @@ class PromptScorer:
         else:
             metrics.weights = active_weights.copy()
 
-        _elapsed = _t.time() - _t0
+        _elapsed = time.time() - _t0
         _calls_end = llm_calls(self.llm)
 
         if is_enabled():
@@ -442,10 +445,8 @@ class PromptScorer:
         seed_offset: int = 0,
         stage: int = 1,
     ) -> PromptNode:
-        """Полная оценка узла: выполнение + метрики + разделение на успехи/провалы."""
-        import time as _t
-
-        _node_t0 = _t.time()
+        """Evaluate a node fully: execution + metrics + success/failure split."""
+        _node_t0 = time.time()
         _node_calls_start = llm_calls(self.llm)
 
         if is_enabled():
@@ -468,7 +469,7 @@ class PromptScorer:
 
         eval_examples = self._last_eval_examples or []
 
-        # Разделяем успешные и неуспешные примеры
+        # Split into successes and failures
         successes, failures = [], []
         for ex in eval_examples:
             if ex.is_success_for_optimization():
@@ -482,7 +483,7 @@ class PromptScorer:
             "failures": failures,
         }
 
-        _node_elapsed = _t.time() - _node_t0
+        _node_elapsed = time.time() - _node_t0
         _node_calls_end = llm_calls(self.llm)
 
         if is_enabled():
@@ -501,7 +502,7 @@ class PromptScorer:
         return node
 
     def calculate_edit_distance(self, prompt1: str, prompt2: str) -> float:
-        """Расстояние между промптами на основе Jaccard-расстояния множеств слов."""
+        """Jaccard distance between two prompts based on word-bag overlap."""
         h1 = self._hash_prompt(prompt1)
         h2 = self._hash_prompt(prompt2)
         pair_key = frozenset((h1, h2))
@@ -521,7 +522,7 @@ class PromptScorer:
     def calculate_pairwise_metric(
         self, nodes: List[PromptNode], max_distance_pairs: int
     ) -> List[float]:
-        """Попарные семантические расстояния между узлами (Jaccard)."""
+        """Pairwise Jaccard distances between prompt nodes."""
         values = []
         for i in range(min(len(nodes), max_distance_pairs)):
             for j in range(i + 1, min(len(nodes), max_distance_pairs)):

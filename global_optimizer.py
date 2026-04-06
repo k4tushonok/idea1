@@ -1,12 +1,12 @@
 """
-Глобальный оптимизатор промптов.
+Global prompt optimizer.
 
-Использует мета-оптимизацию: анализирует историю всех попыток, выявляет
-паттерны успеха/застоя и генерирует новые кандидаты промптов
-через LLM-вызовы с мета-промптом, содержащим историю и exemplars.
+Uses meta-optimization: analyses the full history of attempts,
+identifies success/stagnation patterns, and generates new prompt
+candidates via LLM calls with a history-aware meta-prompt.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 import hashlib
 import numpy as np
 from collections import Counter
@@ -43,11 +43,11 @@ from config import (
 
 
 class GlobalOptimizer:
-    """Глобальный оптимизатор промптов.
+    """Global prompt optimizer.
 
-    Отвечает за масштабные изменения промптов на основе анализа
-    истории оптимизации и мета-промптов. Запускается периодически
-    или при обнаружении застоя в локальной оптимизации.
+    Responsible for large-scale prompt changes based on optimization
+    history analysis and meta-prompts. Triggered periodically or
+    when stagnation is detected in local optimization.
     """
 
     def __init__(
@@ -64,19 +64,19 @@ class GlobalOptimizer:
         self.llm = llm
         self.task_description: str = task_description
 
-        # Статистика глобальной оптимизации
+        # Global optimization statistics
         self.total_global_steps = 0
         self.total_candidates_generated = 0
         self.successful_global_changes = 0
 
-        # История глобальных стратегий
+        # History of applied global strategies
         self.applied_strategies: List[Dict] = []
 
-        # Wrong-exemplars: единый накопленный счётчик провалов по input_text (все шаги)
+        # Wrong-exemplar failure counter (accumulated across all steps)
         self._failure_counter: Counter = Counter()
         self._failure_examples_cache: Dict[str, Example] = {}
-        self._processed_node_ids: set = set()
-        self._seen_prompt_hashes: set = set()
+        self._processed_node_ids: Set[str] = set()
+        self._seen_prompt_hashes: Set[str] = set()
         self._baseline_score_override: Optional[float] = None
 
     def optimize(
@@ -86,15 +86,15 @@ class GlobalOptimizer:
         validation_examples: List[Example],
         baseline_score: Optional[float] = None,
     ) -> List[PromptNode]:
-        """Запуск глобальной оптимизации.
+        """Run the global optimization step.
 
-        Шаги:
-          1. Анализ истории (застой, разнообразие, лучшие элементы)
-          2. Генерация кандидатов через мета-оптимизатор
-          3. Полная оценка на валидационном наборе
-          4. Отбор кандидатов с улучшением выше порога
+        Steps:
+          1. Analyse optimization history (stagnation, diversity, best elements)
+          2. Generate candidates via meta-optimizer (N separate LLM calls)
+          3. Full evaluation on the validation set
+          4. Accept candidates whose score exceeds the threshold
 
-        Возвращает список принятых кандидатов.
+        Returns the list of accepted candidates.
         """
         print("\n" + "=" * 60)
         print(f"GLOBAL OPTIMIZATION STEP | Generation {current_generation}")
@@ -111,7 +111,7 @@ class GlobalOptimizer:
         self._seen_prompt_hashes.clear()
         self._baseline_score_override = baseline_score
 
-        # Шаг 1: Анализ истории оптимизации
+        # Step 1: Analyse optimization history
         print("Step 1: Analyzing optimization history...")
         history_analysis = self._analyze_history()
         if is_enabled():
@@ -126,7 +126,7 @@ class GlobalOptimizer:
             best_els = history_analysis["best_elements"]["top_scores"]
             print(f"[diag] top_{len(best_els)}_scores: {scores_summary(best_els)}")
 
-        # Шаг 2: Генерация кандидатов через мета-оптимизатор (N отдельных LLM вызовов)
+        # Step 2: Generate candidates via meta-optimizer (N separate LLM calls)
         print(
             "\nStep 2: Generating candidates via meta-optimizer (N separate calls)..."
         )
@@ -146,7 +146,7 @@ class GlobalOptimizer:
             print("No candidates generated — skipping evaluation")
             return []
 
-        # Шаг 3: Full evaluation of all candidates on validation set
+        # Step 3: Full evaluation of all candidates on validation set
         print(
             f"\nStep 3: Full evaluation of {len(candidates)} candidates on validation set..."
         )
@@ -165,7 +165,7 @@ class GlobalOptimizer:
             >= previous_best_score + GLOBAL_MIN_IMPROVEMENT
         ]
 
-        # Шаг 4: Анализируем результаты
+        # Step 4: Analyse results
         print("\nStep 4: Analyzing results...")
         self._analyze_global_results(evaluated_candidates, history_analysis)
         if is_enabled():
@@ -185,7 +185,7 @@ class GlobalOptimizer:
         return accepted_candidates
 
     def _analyze_history(self) -> Dict:
-        """Анализ всей истории оптимизации. Определяет паттерны, проблемы и возможности"""
+        """Analyse the full optimization history: identify patterns, problems, and opportunities."""
         best_nodes = self.history.get_best_nodes(TOP_BEST_NODES)
 
         return {
@@ -199,7 +199,7 @@ class GlobalOptimizer:
         }
 
     def _get_worst_nodes(self, bottom_k: int = 3) -> List[PromptNode]:
-        """Получение худших узлов по композитной метрике"""
+        """Return the bottom-k nodes by composite score."""
         nodes = self.history.get_evaluated_nodes()
         if not nodes:
             return []
@@ -207,7 +207,7 @@ class GlobalOptimizer:
         return nodes[:bottom_k]
 
     def _analyze_stagnation(self, best_nodes: List[PromptNode]) -> Dict:
-        """Анализ застоя в оптимизации"""
+        """Analyse stagnation in the optimization trajectory."""
         if len(best_nodes) < 2:
             return {
                 "is_stagnant": False,
@@ -231,7 +231,7 @@ class GlobalOptimizer:
         }
 
     def _analyze_diversity(self) -> Dict:
-        """Анализ разнообразия в популяции"""
+        """Analyse population diversity across recent generations."""
         gens = sorted(self.history.nodes_by_generation.keys())[
             -RECENT_GENERATIONS_FOR_DIVERSITY:
         ]
@@ -249,19 +249,19 @@ class GlobalOptimizer:
         }
 
     def _extract_best_elements(self) -> Dict:
-        """Извлечение лучших элементов: промпты, общие фразы, топ-скоры"""
+        """Extract best elements: prompts, common phrases, top scores."""
         best_nodes = self.history.get_best_nodes(top_k=TOP_BEST_NODES)
 
         if not best_nodes:
             return {"prompts": [], "common_phrases": []}
 
-        # Извлекаем общие фразы/паттерны
+        # Extract common phrases/patterns
         all_words = []
         for node in best_nodes:
             words = node.prompt_text.lower().split()
             all_words.extend(words)
 
-        # Частотный анализ
+        # Frequency analysis
         word_freq = Counter(all_words)
         common_words = [
             word
@@ -269,7 +269,7 @@ class GlobalOptimizer:
             if count >= COMMON_WORD_MIN_FREQ
         ]
 
-        # Возвращаем сами объекты PromptNode, а не только текст
+        # Return PromptNode objects, not just text
         return {
             "prompts": best_nodes,
             "common_phrases": common_words,
@@ -277,7 +277,7 @@ class GlobalOptimizer:
         }
 
     def _get_meta_prompt_nodes(self) -> List[PromptNode]:
-        """Узлы, которые попадут в мета-промпт: фильтрация по порогу + окно."""
+        """Nodes to include in the meta-prompt: filtered by score threshold + history window."""
         all_evaluated = sorted(
             self.history.get_evaluated_nodes(), key=lambda n: n.selection_score()
         )
@@ -293,7 +293,7 @@ class GlobalOptimizer:
         return all_evaluated[-GLOBAL_HISTORY_WINDOW:]
 
     def _update_failure_counter(self) -> None:
-        """Обновляет накопленный счётчик провалов из ещё не обработанных узлов истории."""
+        """Update the accumulated failure counter from unprocessed history nodes."""
         for node in self.history.get_evaluated_nodes():
             if node.id in self._processed_node_ids:
                 continue
@@ -306,13 +306,13 @@ class GlobalOptimizer:
     def _top_exemplars_from_counter(
         self, train_examples: List[Example], counter: Counter
     ) -> List[Example]:
-        """Возвращает топ-EXEMPLAR_COUNT примеров по частоте провалов в counter.
+        """Return the top EXEMPLAR_COUNT examples by failure frequency from counter.
 
-        Приоритет поиска:
-        1. train_examples (lookup по input_text) — совпадает, если провал произошёл на обучающем примере.
-        2. _failure_examples_cache — всегда содержит Example-объекты провалившихся примеров;
-           нужен, потому что оценка узлов ведётся на validation_examples, тогда как сюда
-           передаются train_examples. Эти сплиты не пересекаются → без fallback exemplars=0.
+        Lookup priority:
+        1. train_examples (by input_text) — matches if the failure occurred on a training example.
+        2. _failure_examples_cache — always contains Example objects of failed examples;
+           needed because nodes are evaluated on validation_examples while train_examples
+           are passed here. These splits do not overlap, so without the fallback exemplars=0.
         """
         train_lookup = {ex.input_text: ex for ex in train_examples}
         result = []
@@ -345,8 +345,7 @@ class GlobalOptimizer:
     def _exemplars_current_most_frequent(
         self, train_examples: List[Example]
     ) -> List[Example]:
-        """Стратегия current_most_frequent: топ-K по счётчику провалов только
-        среди инструкций, показанных в текущем мета-промпте."""
+        """Strategy current_most_frequent: top-K by failure count among nodes in the current meta-prompt."""
         counter: Counter = Counter()
         for node in self._get_meta_prompt_nodes():
             for ex in node.evaluation_examples.get("failures", []):
@@ -358,7 +357,7 @@ class GlobalOptimizer:
     def _exemplars_random(
         self, train_examples: List[Example], seed: int
     ) -> List[Example]:
-        """Случайная выборка EXEMPLAR_COUNT примеров. seed=current_generation — меняется каждый шаг."""
+        """Random sample of EXEMPLAR_COUNT examples. seed=current_generation changes each step."""
         k = min(EXEMPLAR_COUNT, len(train_examples))
         if k == 0:
             return []
@@ -375,19 +374,19 @@ class GlobalOptimizer:
         ]
 
     def _exemplars_constant(self, train_examples: List[Example]) -> List[Example]:
-        """Фиксированная выборка EXEMPLAR_COUNT примеров (seed=0, не меняется между шагами)."""
+        """Fixed sample of EXEMPLAR_COUNT examples (seed=0, does not change between steps)."""
         return self._exemplars_random(train_examples, seed=0)
 
     def _select_exemplars(
         self, train_examples: List[Example], current_generation: int
     ) -> List[Example]:
-        """Выбирает wrong-exemplars согласно EXEMPLAR_SELECTION_STRATEGY.
+        """Select wrong-exemplars according to EXEMPLAR_SELECTION_STRATEGY.
 
-        Стратегии:
-          accumulative_most_frequent — топ-K по накопленному счётчику за всю историю (default)
-          current_most_frequent      — топ-K по счётчику провалов инструкций текущего мета-промпта
-          random                     — случайная выборка, seed=current_generation
-          constant                   — фиксированная случайная выборка, seed=0
+        Strategies:
+          accumulative_most_frequent — top-K by accumulated failure counter over full history (default)
+          current_most_frequent      — top-K by failure count for nodes in the current meta-prompt
+          random                     — random sample, seed=current_generation
+          constant                   — fixed random sample, seed=0
         """
         if is_enabled():
             print(
@@ -417,10 +416,10 @@ class GlobalOptimizer:
         current_generation: int,
         exemplars: Optional[List[Example]] = None,
     ) -> List[PromptNode]:
-        """Генерация кандидатов через N отдельных LLM-вызовов с мета-промптом.
+        """Generate candidates via N separate LLM calls with the meta-prompt.
 
-        Каждый вызов извлекает новый промпт из тегов <INS></INS>,
-        дедуплицирует по MD5 и edit-distance, фильтрует по длине
+        Each call extracts a new prompt from <INS></INS> tags,
+        deduplicates by MD5 and edit-distance, and filters by length.
         """
         best_nodes = history_analysis["best_elements"]["prompts"]
         if not best_nodes:
@@ -428,7 +427,7 @@ class GlobalOptimizer:
 
         best_node = best_nodes[0]
 
-        # Узлы для мета-промпта: фильтрация по порогу + окно
+        # Nodes for meta-prompt: filter by threshold + window
         history_nodes = self._get_meta_prompt_nodes()
 
         meta_prompt = Templates.build_meta_optimizer_prompt(
@@ -492,7 +491,7 @@ class GlobalOptimizer:
                     )
                 continue
 
-            # Дедупликация: MD5 (точное совпадение) → edit-distance (похожие в текущем батче)
+            # Deduplication: MD5 (exact match) → edit-distance (near-duplicates in current batch)
             text_hash = hashlib.md5(new_text.encode()).hexdigest()
             if text_hash in self._seen_prompt_hashes:
                 if is_enabled():
@@ -550,12 +549,13 @@ class GlobalOptimizer:
     def _evaluate_global_candidates(
         self, candidates: List[PromptNode], examples: List[Example]
     ) -> List[PromptNode]:
-        """Оценка глобальных кандидатов на validation set. Точное совпадение текста промпта → переиспользуем метрики из истории."""
+        """Evaluate global candidates on the validation set.
+        Exact text match → reuse metrics from history."""
         evaluated = []
         for i, candidate in enumerate(candidates, 1):
             print(f"  Evaluating global candidate {i}/{len(candidates)}...", end=" ")
             try:
-                # Точное строковое совпадение: ищем уже оценённый узел с тем же текстом
+                # Exact string match: find an already-evaluated node with the same text
                 cached_node = next(
                     (
                         self.history.get_node(nid)
@@ -590,7 +590,7 @@ class GlobalOptimizer:
     def _analyze_global_results(
         self, evaluated_candidates: List[PromptNode], history_analysis: Dict
     ):
-        """Анализ результатов глобального шага. Определяет, какие стратегии сработали"""
+        """Analyse global step results: determine which strategies succeeded."""
         if not evaluated_candidates:
             print("No candidates to analyze")
             return
@@ -611,7 +611,7 @@ class GlobalOptimizer:
         print("\n--- Global Step Results ---")
         print(f"Previous best score: {previous_best_score:.3f}")
 
-        # Анализируем каждого кандидата
+        # Analyse each candidate
         improvements = []
         for candidate in evaluated_candidates:
             score = candidate.metrics.composite_score()
@@ -645,10 +645,10 @@ class GlobalOptimizer:
     def should_trigger_global_step(
         self, current_generation: int, stagnation_gens: int = 0
     ) -> bool:
-        """Определение, нужно ли запускать глобальный шаг"""
+        """Determine whether to trigger the global optimization step."""
         from config import FORCE_GLOBAL_AFTER_STAGNATION
 
-        # Триггер 1: Регулярный интервал
+        # Trigger 1: Regular interval
         if current_generation % GLOBAL_TRIGGER_INTERVAL == 0:
             if is_enabled():
                 print(
@@ -656,14 +656,14 @@ class GlobalOptimizer:
                 )
             return True
 
-        # Триггер 2: Форсированный глобальный шаг при стагнации
+        # Trigger 2: Forced global step due to stagnation
         if stagnation_gens >= FORCE_GLOBAL_AFTER_STAGNATION:
             print(
                 f"Global step FORCED by stagnation ({stagnation_gens} gens without improvement)"
             )
             return True
 
-        # Триггер 3: Обнаружен застой в истории
+        # Trigger 3: Stagnation detected in history
         stagnation_info = self.history.get_stagnation_info()
         if stagnation_info["is_stagnant"]:
             print("Global step triggered by history stagnation")
@@ -672,7 +672,7 @@ class GlobalOptimizer:
         return False
 
     def get_statistics(self) -> Dict:
-        """Статистика глобальной оптимизации"""
+        """Return global optimization statistics."""
         return {
             "total_global_steps": self.total_global_steps,
             "total_candidates_generated": self.total_candidates_generated,
@@ -683,7 +683,7 @@ class GlobalOptimizer:
         }
 
     def get_best_strategies(self, top_k: int) -> List[Dict]:
-        """Получение самых успешных стратегий по скору кандидатов"""
+        """Return the most successful strategies ranked by candidate score."""
         strategy_results = []
 
         for item in self.applied_strategies:

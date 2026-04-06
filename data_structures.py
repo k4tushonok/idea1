@@ -1,12 +1,12 @@
 """
-Структуры данных для системы оптимизации промптов.
+Core data structures for the prompt optimization system.
 
-Определяет основные классы:
-- Example — пример для обучения/тестирования с методами оценки корректности
-- TextGradient — текстовый градиент (анализ ошибок + рекомендации)
-- EditOperation — операция редактирования промпта
-- Metrics — метрики оценки с композитным скором
-- PromptNode — узел в дереве эволюции промптов
+Defines the main classes:
+- Example       — a training/test example with answer evaluation methods
+- TextGradient  — a textual gradient (error analysis + improvement directions)
+- EditOperation — a recorded prompt edit operation
+- Metrics       — evaluation metrics with composite scoring
+- PromptNode    — a node in the prompt evolution tree
 """
 
 from dataclasses import dataclass, field, asdict
@@ -25,11 +25,13 @@ from config import (
 _DEFAULT_METRIC_WEIGHTS: Dict[str, float] = {
     m["name"]: m["weight"] for m in METRICS_CONFIG
 }
-_NO_ANSWER_VARIANTS = ["", "no answer", "no answer."]
+NO_ANSWER_VARIANTS: List[str] = ["", "no answer", "no answer."]
+_NO_ANSWER_VARIANTS = NO_ANSWER_VARIANTS  # backward-compat alias
 
 
-def _normalize_answer(s: str) -> str:
-    """Нормализация ответа: приведение к нижнему регистру, удаление артиклей, пунктуации и лишних пробелов"""
+
+def normalize_answer(s: str) -> str:
+    """Normalize an answer: lowercase, remove articles, punctuation, and extra whitespace."""
     def remove_articles(text):
         regex = _re.compile(r"\b(a|an|the)\b", _re.UNICODE)
         return _re.sub(regex, " ", text)
@@ -47,8 +49,8 @@ def _normalize_answer(s: str) -> str:
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
 
-def _extract_final_number(text: str) -> str:
-    """Извлечение финального числового ответа из рассуждения модели."""
+def extract_final_number(text: str) -> str:
+    """Extract the final numeric answer from a model reasoning chain."""
     if text is None:
         return ""
     text = text.strip()
@@ -68,29 +70,29 @@ def _extract_final_number(text: str) -> str:
     numbers = _re.findall(r"-?[\d,]+\.?\d*", text)
     if numbers:
         return numbers[-1].replace(",", "")
-    return _normalize_answer(text)
+    return normalize_answer(text)
 
 
 class OptimizationSource(Enum):
-    """Источник оптимизации промпта"""
+    """Source that produced a given prompt node."""
 
-    INITIAL = "initial"  # Начальный промпт
-    LOCAL = "local"  # Локальная оптимизация
-    GLOBAL = "global"  # Глобальная оптимизация
-    MANUAL = "manual"  # Ручное редактирование
+    INITIAL = "initial"  # Initial seed prompt
+    LOCAL = "local"      # Produced by local optimization
+    GLOBAL = "global"    # Produced by global optimization
+    MANUAL = "manual"    # Manually provided
 
 
 @dataclass
 class Example:
-    """Пример для обучения/тестирования промпта"""
+    """A single training/evaluation example for prompting."""
 
-    input_text: str  # Входные данные
-    expected_output: str  # Ожидаемый результат
-    actual_output: Optional[str] = None  # Фактический результат
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные
+    input_text: str                                           # Input fed to the prompt
+    expected_output: str                                      # Ground-truth answer
+    actual_output: Optional[str] = None                       # Model-generated answer
+    metadata: Dict[str, Any] = field(default_factory=dict)    # Optional task metadata
 
     def is_numeric_qa_task(self) -> bool:
-        """Проверка, является ли задача числовым QA"""
+        """Return True if this example belongs to a numeric QA task (e.g. GSM8K)."""
         if not self.metadata:
             return False
         if self.metadata.get("task_type") == "numeric_qa":
@@ -98,10 +100,10 @@ class Example:
         return bool(self.metadata.get("numeric_qa"))
 
     def _gold_answers(self) -> List[str]:
-        """Получение списка всех допустимых эталонных ответов из метаданных или expected_output"""
+        """Return all valid reference answers from metadata or expected_output."""
         all_ans = self.metadata.get("all_answers") if self.metadata else None
         if all_ans is not None:
-            gold_list = [a for a in all_ans if _normalize_answer(a)]
+            gold_list = [a for a in all_ans if normalize_answer(a)]
             return gold_list if gold_list else _NO_ANSWER_VARIANTS
         if self.expected_output is None:
             return _NO_ANSWER_VARIANTS
@@ -111,11 +113,11 @@ class Example:
 
     @staticmethod
     def _compute_token_f1(actual: str, expected: str) -> float:
-        """Вычисление Token-F1 между фактическим и ожидаемым ответами на уровне токенов"""
+        """Compute token-level F1 between the actual and expected answers."""
         from collections import Counter as _Counter
 
-        actual_norm = _normalize_answer(actual)
-        expected_norm = _normalize_answer(expected)
+        actual_norm = normalize_answer(actual)
+        expected_norm = normalize_answer(expected)
         a_tokens = actual_norm.split()
         e_tokens = expected_norm.split()
 
@@ -131,27 +133,27 @@ class Example:
         return 2 * precision * recall / (precision + recall)
 
     def is_correct(self) -> bool:
-        """Проверка корректности ответа"""
+        """Return True if actual_output exactly matches any gold answer."""
         if self.actual_output is None:
             return False
         gold_list = self._gold_answers()
         return any(
-            _normalize_answer(gold) == _normalize_answer(self.actual_output)
+            normalize_answer(gold) == normalize_answer(self.actual_output)
             for gold in gold_list
         )
 
     def qa_exact_match_score(self) -> float:
-        """Точное совпадение с любым из эталонных ответов (0.0 или 1.0)"""
+        """Exact-match score against any reference answer (0.0 or 1.0)."""
         if self.actual_output is None:
             return 0.0
-        actual_norm = _normalize_answer(self.actual_output)
+        actual_norm = normalize_answer(self.actual_output)
         return max(
-            float(_normalize_answer(gold) == actual_norm)
+            float(normalize_answer(gold) == actual_norm)
             for gold in self._gold_answers()
         )
 
     def qa_token_f1_score(self) -> float:
-        """Максимальный Token-F1 среди всех эталонных ответов"""
+        """Maximum token-F1 score across all reference answers."""
         if self.actual_output is None:
             return 0.0
         return max(
@@ -160,27 +162,27 @@ class Example:
         )
 
     def numeric_exact_match_score(self) -> float:
-        """Точное совпадение извлечённого числового ответа с эталоном"""
+        """Exact match on extracted numeric answer vs. reference."""
         if self.actual_output is None:
             return 0.0
-        actual_num = _normalize_answer(_extract_final_number(self.actual_output))
+        actual_num = normalize_answer(extract_final_number(self.actual_output))
         return max(
-            float(_normalize_answer(_extract_final_number(gold)) == actual_num)
+            float(normalize_answer(extract_final_number(gold)) == actual_num)
             for gold in self._gold_answers()
         )
 
     def numeric_token_f1_score(self) -> float:
-        """Токен-F1 для числовых ответов после извлечения финального числа"""
+        """Token-F1 for numeric answers after extracting the final number."""
         if self.actual_output is None:
             return 0.0
-        actual_num = _extract_final_number(self.actual_output)
+        actual_num = extract_final_number(self.actual_output)
         return max(
-            self._compute_token_f1(actual_num, _extract_final_number(gold))
+            self._compute_token_f1(actual_num, extract_final_number(gold))
             for gold in self._gold_answers()
         )
 
     def generation_concept_coverage_score(self) -> float:
-        """Доля концептов из метаданных, покрытых в сгенерированном ответе"""
+        """Fraction of required concepts from metadata covered in the generated output."""
         if (
             self.actual_output is None
             or not self.metadata
@@ -190,7 +192,7 @@ class Example:
         concepts = self.metadata.get("concepts") or []
         if not concepts:
             return 0.0
-        actual_norm = _normalize_answer(self.actual_output)
+        actual_norm = normalize_answer(self.actual_output)
         covered = sum(
             1
             for c in concepts
@@ -200,7 +202,7 @@ class Example:
 
     @staticmethod
     def _lcs_length(x: List[str], y: List[str]) -> int:
-        """Длина наибольшей общей подпоследовательности (LCS) двух списков"""
+        """Compute the length of the Longest Common Subsequence (LCS) of two token lists."""
         m, n = len(x), len(y)
         prev = [0] * (n + 1)
         for i in range(1, m + 1):
@@ -215,9 +217,9 @@ class Example:
 
     @classmethod
     def _rouge_l_f1(cls, prediction: str, reference: str) -> float:
-        """Вычисление ROUGE-L F1 между предсказанием и эталоном на основе LCS"""
-        pred_tokens = _normalize_answer(prediction).split()
-        ref_tokens = _normalize_answer(reference).split()
+        """Compute ROUGE-L F1 between prediction and reference using LCS."""
+        pred_tokens = normalize_answer(prediction).split()
+        ref_tokens = normalize_answer(reference).split()
         if not pred_tokens or not ref_tokens:
             return 0.0
         lcs_len = cls._lcs_length(pred_tokens, ref_tokens)
@@ -228,7 +230,7 @@ class Example:
         return 2 * precision * recall / (precision + recall)
 
     def generation_reference_token_f1_score(self) -> float:
-        """Максимальный Token-F1 относительно всех референсов для задач генерации"""
+        """Maximum token-F1 against all references for generation tasks."""
         if self.actual_output is None:
             return 0.0
         references = []
@@ -243,7 +245,7 @@ class Example:
         )
 
     def generation_reference_rouge_l_score(self) -> float:
-        """Максимальный ROUGE-L F1 относительно всех референсов для задач генерации"""
+        """Maximum ROUGE-L F1 against all references for generation tasks."""
         if self.actual_output is None:
             return 0.0
         references = []
@@ -256,14 +258,14 @@ class Example:
         return max(self._rouge_l_f1(self.actual_output, ref) for ref in references)
 
     def generation_optimization_score(self) -> float:
-        """Композитный скор для задач генерации: 55% покрытие + 25% token-F1 + 20% ROUGE-L"""
+        """Composite score for generation tasks: 55% concept coverage + 25% token-F1 + 20% ROUGE-L."""
         coverage = self.generation_concept_coverage_score()
         ref_f1 = self.generation_reference_token_f1_score()
         rouge_l = self.generation_reference_rouge_l_score()
         return 0.55 * coverage + 0.25 * ref_f1 + 0.20 * rouge_l
 
     def is_generation_success(self) -> bool:
-        """Успешна ли генерация: полное покрытие концептов и optimization_score ≥ 0.68"""
+        """Return True if full concept coverage and optimization_score >= 0.68."""
         if self.actual_output is None:
             return False
         coverage = self.generation_concept_coverage_score()
@@ -272,19 +274,19 @@ class Example:
         return self.generation_optimization_score() >= 0.68
 
     def is_strict_qa_success(self) -> bool:
-        """Строгий критерий успеха для QA: точное совпадение равно 1.0"""
+        """Strict QA success: exact match score equals 1.0."""
         if self.actual_output is None:
             return False
         return self.qa_exact_match_score() >= 1.0
 
     def is_numeric_qa_success(self) -> bool:
-        """Успех для числового QA: точное совпадение извлечённого числа"""
+        """Return True if the extracted numeric answer exactly matches the reference."""
         if self.actual_output is None:
             return False
         return self.numeric_exact_match_score() >= 1.0
 
     def is_success_for_optimization(self) -> bool:
-        """Сигнал успеха для split на success/failure и mining ошибок"""
+        """Success signal used for success/failure split and failure mining."""
         if self.actual_output is None:
             return False
         if self.is_numeric_qa_task():
@@ -302,7 +304,7 @@ class Example:
     _correctness_cache: ClassVar[Dict[tuple, bool]] = {}
 
     def is_correct_heuristic(self) -> bool:
-        """Проверка корректности ответа эвристически (token-F1 + containment)"""
+        """Heuristic correctness check using token-F1 and substring containment."""
         if self.actual_output is None:
             return False
 
@@ -320,8 +322,8 @@ class Example:
         """Token-F1 + containment check + concept coverage for generation tasks"""
         if actual is None or expected is None:
             return False
-        actual_norm = _normalize_answer(actual)
-        expected_norm = _normalize_answer(expected)
+        actual_norm = normalize_answer(actual)
+        expected_norm = normalize_answer(expected)
         if not actual_norm or not expected_norm:
             return actual_norm == expected_norm  # both empty → True
         # 0. Concept coverage for generation tasks
@@ -354,32 +356,32 @@ class Example:
         return f1 >= CORRECTNESS_TOKEN_F1_THRESHOLD
 
     def to_dict(self) -> Dict:
-        """Сериализация примера в словарь"""
+        """Serialize the example to a dictionary."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Example":
-        """Создание примера из словаря"""
+        """Create an Example from a dictionary."""
         return cls(**data)
 
 
 @dataclass
 class TextGradient:
-    """Текстовый градиент. Описывает на естественном языке, что не так и как исправить"""
+    """Textual gradient: natural-language description of what is wrong and how to improve the prompt."""
 
     failure_examples: List[Example] = field(
         default_factory=list
-    )  # Примеры, на которых промпт ошибся
+    )  # Examples where the prompt failed
     success_examples: List[Example] = field(
         default_factory=list
-    )  # Примеры, на которых промпт работает корректно
-    error_analysis: str = ""  # Анализ ошибок
-    suggested_direction: str = ""  # Предложенное направление улучшения
+    )  # Examples where the prompt succeeded
+    error_analysis: str = ""              # Analysis of observed errors
+    suggested_direction: str = ""         # Suggested improvement direction
     specific_suggestions: List[str] = field(
         default_factory=list
-    )  # Конкретные рекомендации по изменению
-    priority: float = 1.0  # Приоритет этого градиента (0.0 - 1.0)
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Метаданные для анализа
+    )  # Concrete edit recommendations
+    priority: float = 1.0                 # Gradient priority in [0.0, 1.0]
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata for analysis
 
     def to_dict(self) -> Dict:
         return {
@@ -406,12 +408,12 @@ class TextGradient:
 
 @dataclass
 class EditOperation:
-    """Операция редактирования промпта. Отслеживает, что и почему было изменено"""
+    """A recorded prompt edit. Tracks what was changed and why."""
 
-    description: str  # Описание изменения
-    gradient_source: Optional[TextGradient] = None  # Градиент, вызвавший изменение
-    before_snippet: str = ""  # Фрагмент промпта до изменения
-    after_snippet: str = ""  # Фрагмент промпта после изменения
+    description: str                                 # Human-readable description of the change
+    gradient_source: Optional[TextGradient] = None   # Gradient that triggered this edit
+    before_snippet: str = ""                         # Prompt excerpt before the edit
+    after_snippet: str = ""                          # Prompt excerpt after the edit
 
     def to_dict(self) -> Dict:
         return {
@@ -434,17 +436,18 @@ class EditOperation:
 
 @dataclass
 class Metrics:
-    """Метрики оценки промпта. Композитная оценка для ранжирования кандидатов.
-    weights задаются scorer-ом при создании и определяют вклад каждой метрики
-    в композитный score.  Если weights пуст — используется глобальный
-    _DEFAULT_METRIC_WEIGHTS, вычисленный из METRICS_CONFIG.
+    """Prompt evaluation metrics with a composite score for ranking candidates.
+
+    Weights are set by the scorer at creation time and define the contribution of each
+    metric to the composite score.  If weights is empty, the global
+    _DEFAULT_METRIC_WEIGHTS derived from METRICS_CONFIG is used.
     """
 
     metrics: Dict[str, float] = field(default_factory=dict)
     weights: Dict[str, float] = field(default_factory=dict)
 
     def composite_score(self) -> float:
-        """Взвешенная сумма метрик: Σ(weight_i * metric_i)."""
+        """Weighted sum of metrics: Σ(weight_i * metric_i)."""
         w = self.weights if self.weights else _DEFAULT_METRIC_WEIGHTS
         keys = set(list(self.metrics.keys()) + list(w.keys()))
         return sum(self.metrics.get(k, 0.0) * w.get(k, 0.0) for k in keys)
@@ -468,25 +471,25 @@ class Metrics:
 
 @dataclass
 class PromptNode:
-    """Узел в дереве эволюции промптов. Хранит полную информацию о промпте и его происхождении"""
+    """A node in the prompt evolution tree. Stores the full prompt state and its lineage."""
 
     id: str = field(
         default_factory=lambda: str(uuid.uuid4())
-    )  # Уникальный идентификатор промпта
-    prompt_text: str = ""  # Текст промпта
-    parent_id: Optional[str] = None  # Идентификатор родительского промпта
+    )  # Unique prompt identifier
+    prompt_text: str = ""                           # Prompt text
+    parent_id: Optional[str] = None                 # Parent prompt identifier
     children_ids: List[str] = field(
         default_factory=list
-    )  # Идентификаторы дочерних промптов
-    generation: int = 0  # Номер поколения (глубина в дереве)
-    source: OptimizationSource = OptimizationSource.INITIAL  # Источник оптимизации
-    operations: List[EditOperation] = field(default_factory=list)  # История изменений
-    metrics: Metrics = field(default_factory=Metrics)  # Оценка промпта
-    timestamp: datetime = field(default_factory=datetime.now)  # Временная метка
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Дополнительные метаданные
-    is_evaluated: bool = False  # Оценен ли промпт
+    )  # Child prompt identifiers
+    generation: int = 0                             # Generation number (depth in the tree)
+    source: OptimizationSource = OptimizationSource.INITIAL  # Optimization source
+    operations: List[EditOperation] = field(default_factory=list)  # Edit history
+    metrics: Metrics = field(default_factory=Metrics)             # Evaluation metrics
+    timestamp: datetime = field(default_factory=datetime.now)     # Creation timestamp
+    metadata: Dict[str, Any] = field(default_factory=dict)        # Additional metadata
+    is_evaluated: bool = False                      # Whether the prompt has been evaluated
     evaluation_examples: Dict[str, List[Example]] = field(
-        default_factory=lambda: {  # Примеры, на которых оценивался промпт
+        default_factory=lambda: {  # Examples used during evaluation
             "success": [],
             "failures": [],
         }
@@ -496,26 +499,26 @@ class PromptNode:
     )
 
     def add_child(self, child_id: str):
-        """Добавление дочернего узла"""
+        """Register a child node ID."""
         if child_id not in self.children_ids:
             self.children_ids.append(child_id)
 
     def selection_score(self) -> float:
-        """Оценка для отбора: приоритет у full_validation_score, иначе композитный скор"""
+        """Score used for candidate selection: prefers full_validation_score, falls back to composite_score."""
         try:
             return float(self.metadata["full_validation_score"])
         except Exception:
             return self.metrics.composite_score()
 
     def selection_accuracy(self) -> float:
-        """Точность для отбора: full_validation_accuracy или accuracy из метрик"""
+        """Accuracy used for selection: prefers full_validation_accuracy, falls back to accuracy metric."""
         try:
             return float(self.metadata["full_validation_accuracy"])
         except Exception:
             return float(self.metrics.metrics.get("accuracy", 0.0))
 
     def to_dict(self) -> Dict:
-        """Сериализация для сохранения"""
+        """Serialize the node to a dictionary for persistence."""
         return {
             "id": self.id,
             "prompt_text": self.prompt_text,
@@ -545,7 +548,7 @@ class PromptNode:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "PromptNode":
-        """Десериализация из сохраненного формата"""
+        """Deserialize a PromptNode from a saved dictionary."""
         data = data.copy()
         data["source"] = OptimizationSource(data["source"])
         data["operations"] = [EditOperation.from_dict(op) for op in data["operations"]]

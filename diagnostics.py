@@ -1,9 +1,9 @@
 """
-Диагностический модуль для отладки и мониторинга процесса оптимизации.
+Diagnostic module for debugging and monitoring the optimization process.
 
-Предоставляет утилиты для логирования: хэширование промптов, подсчёт
-LLM-вызовов, форматирование метрик, вывод сводок по популяции и кандидатам.
-Активируется флагом ENABLE_DIAGNOSTIC_LOGS из конфигурации.
+Provides logging utilities: prompt hashing, LLM call counting, metric
+formatting, and population/candidate summaries.
+Activated by the ENABLE_DIAGNOSTIC_LOGS flag in config.
 """
 
 from __future__ import annotations
@@ -20,27 +20,27 @@ if TYPE_CHECKING:
 
 
 def is_enabled() -> bool:
-    """Включена ли диагностика."""
+    """Return True if diagnostic logging is enabled."""
     return bool(ENABLE_DIAGNOSTIC_LOGS)
 
 
 def prompt_id(prompt: str) -> str:
-    """Короткий хэш текста промпта"""
+    """Short SHA-1 hash of a prompt string for identification in logs."""
     return hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
 
 
 def llm_calls(llm) -> int:
-    """Общее число API-вызовов"""
+    """Return the total number of API calls made by the LLM client."""
     return getattr(llm, "total_api_calls", 0)
 
 
 def format_stage_weights(weights: dict) -> str:
-    """Форматирует словарь весов стадии в строку"""
+    """Format a stage-weights dictionary as a compact string."""
     return "{" + ", ".join(f"{k}:{v}" for k, v in sorted(weights.items())) + "}"
 
 
 def preview_text(text: Optional[str], max_chars: int = None) -> str:
-    """Обрезает текст до max_chars символов для превью"""
+    """Truncate text to max_chars characters for log previews."""
     if text is None:
         return "<none>"
     value = text.strip()
@@ -51,17 +51,17 @@ def preview_text(text: Optional[str], max_chars: int = None) -> str:
 
 
 def print_prompt(label: str, prompt: str) -> None:
-    """Выводит текст промпта в лог"""
+    """Log a prompt text."""
     print(f"[diag] {label} text: {prompt}")
 
 
 def print_timing(label: str, seconds: float) -> None:
-    """Стандартизированная запись времени выполнения."""
+    """Log a standardized timing entry."""
     print(f"[diag] timing [{label}]: {seconds:.2f}s")
 
 
 def print_population(label: str, nodes: List) -> None:
-    """Краткая сводка по популяции: размер, мин/макс/среднее score."""
+    """Log a brief population summary: size, min/max/mean score."""
     scores = [n.selection_score() for n in nodes]
     if scores:
         print(
@@ -74,7 +74,7 @@ def print_population(label: str, nodes: List) -> None:
 
 
 def scores_summary(values: List[float], precision: int = 3) -> str:
-    """Форматирует список score-значений в сжатую строку."""
+    """Format a list of score values as a compact string."""
     if not values:
         return "[]"
     fmt = f".{precision}f"
@@ -82,7 +82,7 @@ def scores_summary(values: List[float], precision: int = 3) -> str:
 
 
 def print_candidates_summary(label: str, nodes: List) -> None:
-    """Сводка по набору кандидатов с сортировкой по убыванию score."""
+    """Log a summary of candidate nodes sorted by descending score."""
     if not nodes:
         print(f"[diag] {label}: (empty)")
         return
@@ -103,7 +103,7 @@ def print_eval_summary(
     llm_calls_after: int,
     elapsed_s: float,
 ) -> None:
-    """Итоговая сводка оценки"""
+    """Log a final evaluation summary."""
     api_delta = llm_calls_after - llm_calls_before
     per_metric = ", ".join(f"{n}={v:.3f}" for n, v in sorted(metrics.metrics.items()))
     print(

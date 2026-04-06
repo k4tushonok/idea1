@@ -1,9 +1,9 @@
 """
-Редактор промптов.
+Prompt editor.
 
-Применяет текстовые градиенты для генерации улучшенных вариантов
-промптов и создаёт Monte Carlo парафразы (synonym samples)
-для расширения пространства поиска.
+Applies textual gradients to generate improved prompt variants
+and creates Monte Carlo paraphrases (synonym samples)
+to broaden the search space.
 """
 
 from typing import List, Dict, Optional
@@ -16,7 +16,7 @@ from config import STEPS_PER_GRADIENT, MC_SAMPLES_PER_STEP, MIN_PROMPT_LENGTH
 
 
 class PromptEditor:
-    """Редактор промптов: применение градиентов и генерация парафраз."""
+    """Prompt editor: applies gradients and generates paraphrases."""
 
     def __init__(self, llm: BaseLLM, task_description: str = ""):
         self.llm = llm
@@ -29,10 +29,10 @@ class PromptEditor:
         gradient: TextGradient,
         parent_node: Optional[PromptNode] = None,
     ) -> List[PromptNode]:
-        """Применение градиента для генерации новых промптов.
+        """Apply a gradient to generate improved prompt variants.
 
-        LLM получает текущий промпт + ошибки + feedback и генерирует
-        STEPS_PER_GRADIENT улучшенных промптов в тегах <START>/<END>.
+        The LLM receives the current prompt + failures + feedback and
+        produces STEPS_PER_GRADIENT improved prompts wrapped in <START>/<END> tags.
         """
         editing_prompt = Templates.build_editing_prompt(
             current_prompt,
@@ -51,7 +51,7 @@ class PromptEditor:
         try:
             response_text = self.llm.invoke(prompt=editing_prompt)
 
-            # Парсим <START>/<END> теги → список текстов новых промптов
+            # Parse <START>/<END> tags → list of new prompt texts
             new_prompts = TaggedTextParser.parse_tagged_text(
                 response_text, "<START>", "<END>"
             )
@@ -60,7 +60,7 @@ class PromptEditor:
 
             nodes: List[PromptNode] = []
             for new_prompt_text in new_prompts:
-                # Нормализация (убираем code-fence мусор, мета-префиксы)
+                # Normalize: strip code-fence artifacts and meta-prefixes
                 try:
                     new_prompt_text = MarkdownParser.normalize_prompt_text(
                         new_prompt_text
@@ -94,7 +94,7 @@ class PromptEditor:
 
         except Exception as e:
             print(f"Error in apply_gradient: {e}")
-            # Fallback: дописываем feedback как доп. инструкцию
+            # Fallback: append feedback as an additional instruction
             new_prompt = (
                 f"{current_prompt}\n\nAdditional guidance:\n- {gradient.error_analysis}"
             )
@@ -118,7 +118,7 @@ class PromptEditor:
         n: int = None,
         parent_node: Optional[PromptNode] = None,
     ) -> List[PromptNode]:
-        """Генерация MC-парафраз промпта для расширения пространства поиска."""
+        """Generate MC paraphrases of a prompt to broaden the search space."""
         n = n if n is not None else MC_SAMPLES_PER_STEP
         if n <= 0:
             return []
@@ -144,7 +144,7 @@ class PromptEditor:
 
                 if len(new_text) < MIN_PROMPT_LENGTH:
                     continue
-                # Не дублируем оригинал
+                # Do not return the original unchanged prompt
                 if new_text.strip().lower() == prompt_text.strip().lower():
                     continue
                 if any(
