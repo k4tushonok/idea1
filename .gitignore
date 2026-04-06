@@ -51,9 +51,7 @@ htmlcov/
 
 # Project-specific
 notebooks/optimization_results/
-notebooks/optimization_results_common_gen/
-notebooks/optimization_results_gsm8k/
-notebooks/optimization_results_xsum/
+notebooks/
 *.log
 .cache/
 temp/
