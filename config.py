@@ -50,7 +50,7 @@ MAX_GENERATIONS: int = 6                 # Maximum number of optimization genera
 LOCAL_ITERATIONS_PER_GENERATION: int = 2 # Number of local optimization iterations per generation
 GLOBAL_TRIGGER_INTERVAL: int = 2         # Run global optimization every N generations
 PATIENCE: int = 3                        # Generations without improvement before early stopping
-FORCE_GLOBAL_AFTER_STAGNATION: int = 1   # Force a global step after N generations without improvement
+FORCE_GLOBAL_AFTER_STAGNATION: int = 3   # Force a global step after N generations without improvement
 MIN_IMPROVEMENT: float = 0.001           # Minimum score improvement to count as progress
 SIMILARITY_THRESHOLD: float = 0.80       # Cosine similarity threshold for duplicate prompt detection
 
