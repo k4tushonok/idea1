@@ -345,13 +345,22 @@ class GlobalOptimizer:
     def _exemplars_current_most_frequent(
         self, train_examples: List[Example]
     ) -> List[Example]:
-        """Strategy current_most_frequent: top-K by failure count among nodes in the current meta-prompt."""
+        """Strategy current_most_frequent: top-K by failure count for the current best prompt only."""
+        best_nodes = self.history.get_best_nodes(1)
+        if not best_nodes:
+            return []
+        best_node = best_nodes[0]
         counter: Counter = Counter()
-        for node in self._get_meta_prompt_nodes():
-            for ex in node.evaluation_examples.get("failures", []):
-                counter[ex.input_text] += 1
-                if ex.input_text not in self._failure_examples_cache:
-                    self._failure_examples_cache[ex.input_text] = ex
+        for ex in best_node.evaluation_examples.get("failures", []):
+            counter[ex.input_text] += 1
+            if ex.input_text not in self._failure_examples_cache:
+                self._failure_examples_cache[ex.input_text] = ex
+        if is_enabled():
+            print(
+                f"[diag] _exemplars_current_most_frequent: best_node={best_node.id} "
+                f"failures={len(best_node.evaluation_examples.get('failures', []))} "
+                f"counter_keys={len(counter)}"
+            )
         return self._top_exemplars_from_counter(train_examples, counter)
 
     def _exemplars_random(
@@ -661,12 +670,6 @@ class GlobalOptimizer:
             print(
                 f"Global step FORCED by stagnation ({stagnation_gens} gens without improvement)"
             )
-            return True
-
-        # Trigger 3: Stagnation detected in history
-        stagnation_info = self.history.get_stagnation_info()
-        if stagnation_info["is_stagnant"]:
-            print("Global step triggered by history stagnation")
             return True
 
         return False
